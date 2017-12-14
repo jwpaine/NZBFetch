@@ -57,30 +57,6 @@ type Segment struct {
 	Groups     []string
 }
 
-// , channel chan string
-func handler(conn *tls.Conn) {
-	println("Connected!")
-	for {
-		buf := make([]byte, 100)
-		n, err := conn.Read(buf)
-		if err != nil {
-			log.Println(n, err)
-			return
-		}
-
-		//	println(string(buf[:n]))
-		//	println(string(buf[:n]))
-		tokens := strings.Fields(string(buf[:n]))
-		// if ready
-		status := tokens[0]
-
-		fmt.Print("status: " + status + "\n")
-
-		//		fmt.Print(string(buf[:n]))
-
-	}
-}
-
 func authenticate(username string, password string, conn *tls.Conn) (n int, err error) {
 	n, err = send("AUTHINFO USER "+username, conn)
 	if err != nil {
