@@ -71,50 +71,6 @@ func worker(id int, jobs <-chan Segment, con <-chan *tls.Conn, config Config, re
 	}
 }
 
-func segmentWriter(results chan Segment) {
-
-	for {
-		segment := <-results
-		//	fmt.Println("Writing segment: " + strconv.Itoa(segment.Article.Number))
-		fmt.Println("Writing segment: " + segment.Article.Id)
-		// save segment
-		//	fmt.Println("Success. Received segment of length: " + strconv.Itoa(len(segment)))
-		// write segment to disk
-		err := ioutil.WriteFile("test.yenc", segment.Data, 0644)
-		if err != nil {
-			fmt.Print(err)
-			panic(err)
-		}
-		// decode
-		f, err := os.Open("test.yenc")
-		if err != nil {
-			fmt.Print(err)
-			break
-		}
-		part, err := yenc.Decode(f)
-		if err != nil {
-			fmt.Print(err)
-			break
-		}
-		fmt.Println("Successful Decode: " + string(part.Name))
-		/*	// write decoded part to disk
-			// if file does not exist, create it
-			if _, err := os.Stat(string(part.Name)); os.IsNotExist(err) {
-				_, err := os.Create(string(part.Name))
-				if err != nil {
-					panic(err)
-				}
-			}
-			// open file
-			out, err := os.OpenFile(string(part.Name), os.O_APPEND|os.O_WRONLY, 0600)
-			if err != nil {
-				panic(err)
-			}
-			defer f.Close()
-			out.Write(part.Body) */
-	}
-}
-
 func write(segment Segment) {
 	// write yenc to disk
 	err := ioutil.WriteFile("test.yenc", segment.Data, 0644)
@@ -202,11 +158,6 @@ func manager() {
 			//	fmt.Println("loop start")
 			segment := <-results
 			fmt.Println("Got segment: " + segment.Article.Id)
-			//	fmt.Println("Expecting value: " + strconv.Itoa(expected))
-			//	fmt.Println("Writing segment: " + segment.Article.Id)
-			// save segment
-			//	fmt.Println("Success. Received segment of length: " + strconv.Itoa(len(segment)))
-			// write segment to disk
 
 			if segment.Article.Number == expected {
 				fmt.Println("Segment " + strconv.Itoa(expected) + " expected, writing to disk")
@@ -241,80 +192,10 @@ func manager() {
 			fmt.Println("Segment " + strconv.Itoa(expected) + " unexpected, saving to map")
 			segmentMap[segment.Article.Number] = segment
 
-			/*	// write decoded part to disk
-				// if file does not exist, create it
-				if _, err := os.Stat(string(part.Name)); os.IsNotExist(err) {
-					_, err := os.Create(string(part.Name))
-					if err != nil {
-						panic(err)
-					}
-				}
-				// open file
-				out, err := os.OpenFile(string(part.Name), os.O_APPEND|os.O_WRONLY, 0600)
-				if err != nil {
-					panic(err)
-				}
-				defer f.Close()
-				out.Write(part.Body) */
 		}
 	}
 	close(jobs)
-	// get total segments we should listen for instead of defining number
-	/*	for a := 1; a <= 10; a++ {
-		segment := <-results
-		fmt.Print("Writing segment: " + strconv.Itoa(segment.Article.Number))
 
-	} */
-
-	// fetch articles ===========================
-	// for each file in nzb
-	/*	for i := 0; i < len(nzb.Files); i++ {
-			// for each segment
-			fmt.Println("Working on File: " + nzb.Files[i].Subject)
-			for j := 0; j < len(nzb.Files[i].Segments); j++ {
-				segment, err := fetchSegment(nzb.Files[i].Segments[j], nzb.Files[i].Groups, conn)
-				if err != nil {
-					fmt.Print(err)
-					continue
-				}
-				// save segment
-				//	fmt.Println("Success. Received segment of length: " + strconv.Itoa(len(segment)))
-				// write segment to disk
-				err = ioutil.WriteFile("test.yenc", segment, 0644)
-				if err != nil {
-					fmt.Print(err)
-					panic(err)
-				}
-				// decode
-				f, err := os.Open("test.yenc")
-				if err != nil {
-					fmt.Print(err)
-					break
-				}
-				part, err := yenc.Decode(f)
-				if err != nil {
-					fmt.Print(err)
-					break
-				}
-				//	fmt.Println("Successful Decode: " + string(part.Name))
-				// write decoded part to disk
-				// if file does not exist, create it
-				if _, err := os.Stat(string(part.Name)); os.IsNotExist(err) {
-					_, err := os.Create(string(part.Name))
-					if err != nil {
-						panic(err)
-					}
-				}
-				// open file
-				out, err := os.OpenFile(string(part.Name), os.O_APPEND|os.O_WRONLY, 0600)
-				if err != nil {
-					panic(err)
-				}
-				defer f.Close()
-				out.Write(part.Body)
-			}
-		}
-	*/
 	fmt.Println("Download Complete!")
 }
 func main() {
