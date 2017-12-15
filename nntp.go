@@ -1,4 +1,5 @@
 /*
+~~~~rfc3977~~~~~
 100 help text follows
    199 debug output
    200 server ready - posting allowed
@@ -15,10 +16,8 @@
    231 list of new newsgroups follows
    235 article transferred ok
    240 article posted ok
-
    335 send article to be transferred.  End with <CR-LF>.<CR-LF>
    340 send article to be posted. End with <CR-LF>.<CR-LF>
-
    400 service discontinued
    411 no such news group
    412 no newsgroup has been selected
@@ -32,7 +31,6 @@
    437 article rejected - do not try again.
    440 posting not allowed
    441 posting failed
-
    500 command not recognized
    501 command syntax error
    502 access restriction or permission denied
@@ -72,7 +70,9 @@ func connect(config Config) (conn *tls.Conn) {
 	conf := &tls.Config{
 	//InsecureSkipVerify: true,
 	}
-	// open tcp connection to server
+	/*
+		open tcp connection to server
+	*/
 	conn, err := tls.Dial("tcp", config.Address+":"+config.Port, conf)
 	if err != nil {
 		log.Println(conn, err)
@@ -142,22 +142,19 @@ func fetchSegment(segment Segment) (Segment, error) {
 			status := strings.Fields(string(readBuf[:n]))[0]
 			//	fmt.Print(string(readBuf[:n]))
 			switch status {
-			case "211":
-				//	fmt.Print("Group Selected\n")
+			case "211": // group selected
 				// get article
 				_, err := send("BODY <"+segmentId+">", conn)
 				if err != nil {
 					return segment, err
 				}
 				continue
-			case "411":
-				fmt.Print("No Such Group\n")
+			case "411": // no such group
 				break
-			case "222":
-				//	fmt.Print("Head and Body follow\n")
+			case "222": // Head and Body follow
 				segmentBuf = append(segmentBuf, readBuf[:n]...) // append readBuf to segment
+				// if end of file
 				if bytes.Contains(readBuf, []byte("=yend")) {
-					//	fmt.Print("END\n")
 					return Segment{segment.Article, segmentBuf, nil, nil}, nil
 				}
 				continue
@@ -165,23 +162,17 @@ func fetchSegment(segment Segment) (Segment, error) {
 				fmt.Print("430 no such article found\n")
 				break
 			default:
-				//		fmt.Print(string(readBuf[:n]))
 				// prior status was 220, or segment data so save
 				readCount += n
 				segmentBuf = append(segmentBuf, readBuf[:n]...) // append readBuf to segment
-				//	fmt.Print("Saving segment ")
-				//	fmt.Print("Read: " + strconv.Itoa(readCount) + "\n")
 				// if end of segment found, return segmentBuf containing entire segment
 				if bytes.Contains(readBuf, []byte("=yend")) {
-					// fmt.Print("END\n")
 					return Segment{segment.Article, segmentBuf, nil, nil}, nil
 				}
 				continue
 			}
 			break
-
 		}
-		fmt.Print("For loop break\n")
 	}
 	return segment, errors.New("Segment not found in any group")
 }

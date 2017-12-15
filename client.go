@@ -39,38 +39,25 @@ func loadConfig() (conf Config, err error) {
 	return
 }
 
-func worker(id int, jobs <-chan Segment, con <-chan *tls.Conn, config Config, results chan<- Segment) {
-
-	/*	var conn *tls.Conn
-		conn = connect(config)
-		if conn == nil {
-			return
-		}
-		defer conn.Close()
-		j.Connection = conn
-	*/
+/*
+	workers take a connection c and a job j from respective pools and fetch segment
+*/
+func worker(id int, jobs <-chan Segment, con <-chan *tls.Conn, results chan<- Segment) {
 	for c := range con {
-
 		for j := range jobs {
-
 			j.Connection = c
-			//		fmt.Println("worker", id, "started  job", j.Article.Number)
-			//	time.Sleep(time.Second)
 			segment, err := fetchSegment(j)
-			//		fmt.Println("worker", id, "finished job", j.Article.Number)
-			// close connection
-			//	c.Close()
-
 			if err != nil {
 				fmt.Print(err)
 			}
 			results <- segment
-
 		}
-
 	}
 }
 
+/*
+	write yenc file to disk, decode, append binary data
+*/
 func write(segment Segment) {
 	// write yenc to disk
 	err := ioutil.WriteFile("test.yenc", segment.Data, 0644)
@@ -83,7 +70,6 @@ func write(segment Segment) {
 	if err != nil {
 		fmt.Print(err)
 		return
-
 	}
 	part, err := yenc.Decode(f)
 	if err != nil {
@@ -105,71 +91,42 @@ func write(segment Segment) {
 	}
 	defer f.Close()
 	out.Write(part.Body)
-
 	fmt.Print("Written")
 }
 
-func manager() {
-	// load config ===============
-	config, err := loadConfig()
-	if err != nil {
-		fmt.Print("Error parsing config")
-		return
-	}
-	maxConnections := config.Connections
-	fmt.Print("Max Connections: " + strconv.Itoa(maxConnections) + "\n")
-
-	connections := make(chan *tls.Conn, 20)
+/*
+	manage the download of files and segments contained in a single nzb file
+*/
+func download(nzb *Nzb, fileBegin int, segmentBegin int, connections chan *tls.Conn, maxWorkers int) {
 	jobs := make(chan Segment, 200)
 	results := make(chan Segment, 100)
 
-	for w := 1; w <= 20; w++ { // 3 connections
-		go worker(w, jobs, connections, config, results)
+	for w := 1; w <= maxWorkers; w++ { // 3 connections
+		go worker(w, jobs, connections, results)
 	}
-
-	for c := 1; c <= 5; c++ {
-		connections <- connect(config)
-	}
-
-	fmt.Print("Loading next nzb file...")
-	b, err := ioutil.ReadFile("test.nzb") // just pass the file name
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println("Successfully Opened test.nzb")
-	nzb, err := NewString(string(b)) // marshal, returning pointer to nzb object
-	if err != nil {
-		panic(err)
-	}
-	//	go segmentWriter(results)
-
 	// for each file in nzb
-	for i := 0; i < len(nzb.Files); i++ {
+	for i := fileBegin; i < len(nzb.Files); i++ {
 		// create map to keep track of out-of-order segments
 		segmentMap := make(map[int]Segment)
 		var expected = 1
 		// for each segment
 		fmt.Println("Working on new File: " + nzb.Files[i].Subject)
 		// add each segment to jobs pool
-		for j := 0; j < len(nzb.Files[i].Segments); j++ {
+		for j := segmentBegin; j < len(nzb.Files[i].Segments); j++ {
 			jobs <- Segment{nzb.Files[i].Segments[j], nil, nil, nzb.Files[i].Groups}
 		}
 		for {
-			//	fmt.Println("loop start")
 			segment := <-results
 			fmt.Println("Got segment: " + segment.Article.Id)
 
 			if segment.Article.Number == expected {
 				fmt.Println("Segment " + strconv.Itoa(expected) + " expected, writing to disk")
 				write(segment)
-
 				expected++
 				// write segments stored in memory:
-
 				for expected < len(nzb.Files[i].Segments)+1 {
 					fmt.Println("Checking memory")
 					j := segmentMap[expected]
-
 					// if next segment not found in memory
 					if j.Article.Number == 0 {
 						fmt.Println("next segment not found in memory")
@@ -188,15 +145,50 @@ func manager() {
 				}
 				continue
 			}
-
 			fmt.Println("Segment " + strconv.Itoa(expected) + " unexpected, saving to map")
 			segmentMap[segment.Article.Number] = segment
-
 		}
 	}
 	close(jobs)
-
 	fmt.Println("Download Complete!")
+}
+
+func manager() {
+	/*
+		load config and define parameters
+	*/
+	config, err := loadConfig()
+	if err != nil {
+		fmt.Print("Error parsing config")
+		return
+	}
+	maxConnections := config.Connections
+	fmt.Print("Max Connections: " + strconv.Itoa(maxConnections) + "\n")
+	/*
+		make job pool and send maxConnections into pool to be multiplexed by workers
+	*/
+	connections := make(chan *tls.Conn, 20)
+	for c := 1; c <= maxConnections; c++ {
+		connections <- connect(config)
+	}
+	/*
+		load NZB file(s) from disk
+	*/
+	fmt.Print("Loading next nzb file...")
+	b, err := ioutil.ReadFile("test.nzb") // just pass the file name
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println("Successfully Opened test.nzb")
+	nzb, err := NewString(string(b)) // marshal, returning pointer to nzb object
+	if err != nil {
+		panic(err)
+	}
+	/*
+		call download for each NZB opened
+	*/
+	go download(nzb, 0, 0, connections, maxConnections)
+
 }
 func main() {
 
