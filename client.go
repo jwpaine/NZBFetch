@@ -40,7 +40,8 @@ func loadConfig() (conf Config, err error) {
 }
 
 /*
-	workers take a connection c and a job j from respective pools and fetch segment
+	workers take a connection c and a job j from respective pools,
+	fetch segment, and send segment to results channel where it's read by the download function
 */
 func worker(id int, jobs <-chan Segment, con <-chan *tls.Conn, results chan<- Segment) {
 	for c := range con {
