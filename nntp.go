@@ -68,7 +68,7 @@ func authenticate(username string, password string, conn *tls.Conn) (n int, err 
 }
 func connect(config Config) (conn *tls.Conn) {
 	conf := &tls.Config{
-	//InsecureSkipVerify: true,
+		InsecureSkipVerify: false,
 	}
 	/*
 		open tcp connection to server
