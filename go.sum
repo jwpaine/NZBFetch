@@ -1,0 +1,4 @@
+github.com/BurntSushi/toml v1.3.0 h1:Ws8e5YmnrGEHzZEzg0YvK/7COGYtTC5PbaH9oSSbgfA=
+github.com/BurntSushi/toml v1.3.0/go.mod h1:CxXYINrC8qIiEnFrOxCa7Jy5BFHlXnUU2pbicEuybxQ=
+github.com/chrisfarms/yenc v0.0.0-20140520125709-00bca2f8b3cb h1:BK9pqCayfiXrcRypTPxDsunA6hPJtOyOTJYY2DJ429g=
+github.com/chrisfarms/yenc v0.0.0-20140520125709-00bca2f8b3cb/go.mod h1:V4bkS2felTTOSIsYx9JivzrbdBOuksi02ZkzfbHUVAk=
