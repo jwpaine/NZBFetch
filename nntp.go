@@ -141,6 +141,7 @@ func fetchSegment(segment Segment) (Segment, error) {
 			// switch based on status code in reply from server
 			status := strings.Fields(string(readBuf[:n]))[0]
 			//	fmt.Print(string(readBuf[:n]))
+			//	fmt.Println("Status: " + status)
 			switch status {
 			case "211": // group selected
 				// get article
@@ -150,11 +151,27 @@ func fetchSegment(segment Segment) (Segment, error) {
 				}
 				continue
 			case "411": // no such group
+				fmt.Println("No such group: " + group)
 				break
-			case "222": // Head and Body follow
-				segmentBuf = append(segmentBuf, readBuf[:n]...) // append readBuf to segment
+			case "222": // Body follows
+
+				fmt.Println("222 appending")
+
+				startIndex := bytes.Index(readBuf, []byte("=ybegin")) // Find the index of "=ybegin" in readBuf
+
+				if startIndex != -1 {
+					segmentBuf = append(segmentBuf, readBuf[startIndex:n]...) // Append readBuf from startIndex to n
+				} else {
+					// fmt.Println("startIndex not found, unhandled")
+					// Handle the case when "=ybegin" is not found in readBuf
+					// Here, you can choose to handle the error or take an alternative action
+					// For example, you can log a message or skip appending readBuf to segmentBuf
+					panic("startIndex not found")
+				}
+
 				// if end of file
 				if bytes.Contains(readBuf, []byte("=yend")) {
+					fmt.Println("=yend found -> Returning segment")
 					return Segment{segment.Article, segmentBuf, nil, nil}, nil
 				}
 				continue
@@ -163,14 +180,20 @@ func fetchSegment(segment Segment) (Segment, error) {
 				break
 			default:
 				// prior status was 220, or segment data so save
-				readCount += n
+				readCount += n                                  // unused!?
 				segmentBuf = append(segmentBuf, readBuf[:n]...) // append readBuf to segment
+				fmt.Println("default appending")
 				// if end of segment found, return segmentBuf containing entire segment
+
 				if bytes.Contains(readBuf, []byte("=yend")) {
+					fmt.Println("default =yend found. Returning segment")
+					//	fmt.Println("default last buffer: " + string(readBuf[:n]))
 					return Segment{segment.Article, segmentBuf, nil, nil}, nil
 				}
+
 				continue
 			}
+
 			break
 		}
 	}

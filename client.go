@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/tls"
 	"fmt"
+
 	"io/ioutil"
 	"log"
 	"os"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/BurntSushi/toml" // config as Tom's Obvious, Minimal Language
 	"github.com/chrisfarms/yenc"
+	//	"gopkg.in/yenc.v0"
 	// decode yenc
 )
 
@@ -40,8 +42,8 @@ func loadConfig() (conf Config, err error) {
 }
 
 /*
-	workers take a connection c and a job j from respective pools,
-	fetch segment, and send segment to results channel where it's read by the download function
+workers take a connection c and a job j from respective pools,
+fetch segment, and send segment to results channel where it's read by the download function
 */
 func worker(id int, jobs <-chan Segment, con <-chan *tls.Conn, results chan<- Segment) {
 	for c := range con {
@@ -57,46 +59,166 @@ func worker(id int, jobs <-chan Segment, con <-chan *tls.Conn, results chan<- Se
 }
 
 /*
-	write yenc file to disk, decode, append binary data
+write yenc file to disk, decode, append binary data
 */
 func write(segment Segment) {
-	// write yenc to disk
+
 	err := ioutil.WriteFile("test.yenc", segment.Data, 0644)
 	if err != nil {
 		fmt.Print(err)
 		return
 	}
-	// decode
-	f, err := os.Open("test.yenc")
+
+	d, err := os.Open("test.yenc")
 	if err != nil {
 		fmt.Print(err)
 		return
 	}
-	part, err := yenc.Decode(f)
+
+	part, err := yenc.Decode(d)
 	if err != nil {
-		fmt.Print(err)
+		panic("decoding: " + err.Error())
 	}
-	//	fmt.Println("Successful Decode: " + string(part.Name))
-	// write decoded part to disk
-	// if file does not exist, create it
-	if _, err := os.Stat(string(part.Name)); os.IsNotExist(err) {
-		_, err := os.Create(string(part.Name))
+	fmt.Println("Decoded: Filename", part.Name)
+	//	fmt.Println("Body Bytes", part.Body)
+
+	// var b bytes.Buffer
+	// write yenc to disk
+	/*	err := ioutil.WriteFile("test.yenc", segment.Data, 0644)
+			if err != nil {
+				fmt.Print(err)
+				return
+			}
+
+			dec, err := os.Open("test.yenc")
+			if err != nil {
+				fmt.Print(err)
+				return
+			}
+
+
+		out, err := os.OpenFile(yread.Filename, os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			fmt.Println("open " + yread.Filename + " Failed")
+			return
+		}
+
+		fmt.Println("open " + yread.Filename + " SUCCESS")
+
+		_, err = io.Copy(out, yread)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return
+		}
+
+		fmt.Println("Successful write part: " + yread.Filename)
+
+
+	*/
+
+	// buf1, err := ioutil.ReadAll(yenc)
+
+	/***********************/
+
+	/* d, err := yenc.Decode(f) // , yenc.DecodeWithBufferSize(20)
+
+	if err != nil {
+		fmt.Print("error decoding segment")
+		return
+		//	panic(err)
+
+	}
+
+	fmt.Println("Decoded: " + d.Header().Name)
+
+	_, err = io.Copy(&b, d)
+
+	if err != nil {
+		fmt.Print("error copying to memory")
+		return
+	}
+
+	fmt.Print("Copied decoded to memory")
+
+	*/
+
+	/*
+		_, err = io.Copy(&b, d)
+
+		if err != nil {
+			fmt.Print(err)
+			return
+		}
+
+		fmt.Print("Copied decoded to memory")
+
+		if _, err := os.Stat(d.Header().Name); os.IsNotExist(err) {
+			_, err := os.Create(d.Header().Name)
+			if err != nil {
+				panic(err)
+			}
+		}
+
+		out, err := os.OpenFile(d.Header().Name, os.O_APPEND|os.O_WRONLY, 0600)
 		if err != nil {
 			panic(err)
 		}
+
+		fmt.Println("Opened file for writing: " + d.Header().Name)
+
+		_, err = b.WriteTo(out)
+		if err != nil {
+			// Handle the error
+			fmt.Println("Failed to write buffer to file:", err)
+			return
+		}
+
+		fmt.Println("Buffer contents written to file successfully.")
+
+	*/
+
+	/*
+		part, err := yenc.Decode(f)
+		if err != nil {
+			fmt.Print(err)
+		}
+		fmt.Println("Successful Decode: " + string(part.Header().Name))
+		// write decoded part to disk
+		// if file does not exist, create it
+		if _, err := os.Stat(string(part.Header().Name)); os.IsNotExist(err) {
+			_, err := os.Create(string(part.Header().Name))
+			if err != nil {
+				panic(err)
+			}
+		}
+		// open file
+		out, err := os.OpenFile(string(part.Header().Name), os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			panic(err)
+		}
+		defer f.Close()
+		out.Write(part.)
+		fmt.Print("Written") */
+
+}
+
+func sanitizeFilename(filename string) string {
+	// Define a list of invalid characters
+	invalidChars := []string{"\\", "/", ":", "*", "?", "\"", "<", ">", "|"}
+
+	// Replace invalid characters with underscores
+	for _, char := range invalidChars {
+		filename = strings.ReplaceAll(filename, char, "_")
 	}
-	// open file
-	out, err := os.OpenFile(string(part.Name), os.O_APPEND|os.O_WRONLY, 0600)
-	if err != nil {
-		panic(err)
-	}
-	defer f.Close()
-	out.Write(part.Body)
-	fmt.Print("Written")
+
+	// Remove whitespace from the filename
+	filename = strings.TrimSpace(filename)
+
+	return filename
 }
 
 /*
-	manage the download of files and segments contained in a single nzb file
+manage the download of files and segments contained in a single nzb file
 */
 func download(nzb *Nzb, fileBegin int, segmentBegin int, connections chan *tls.Conn, maxWorkers int) {
 	jobs := make(chan Segment, 200)
@@ -118,7 +240,9 @@ func download(nzb *Nzb, fileBegin int, segmentBegin int, connections chan *tls.C
 		}
 		for {
 			segment := <-results
-			fmt.Println("Got segment: " + segment.Article.Id)
+			size := len(segment.Data)
+			fmt.Println("Got segment: " + segment.Article.Id + " Article expected size (bytes): " + strconv.Itoa(segment.Article.Bytes))
+			fmt.Printf("Actual Size of segment.Data: %d\n", size)
 
 			if segment.Article.Number == expected {
 				fmt.Println("Segment " + strconv.Itoa(expected) + " expected, writing to disk")
@@ -191,6 +315,7 @@ func manager() {
 	go download(nzb, 0, 0, connections, maxConnections)
 
 }
+
 func main() {
 
 	log.SetFlags(log.Lshortfile)
@@ -207,4 +332,19 @@ func main() {
 	if scanner.Err() != nil {
 		// handle error.
 	}
+
+	// test decode
+	/*	f, err := os.Open("test.yenc")
+		if err != nil {
+			fmt.Print(err)
+			return
+		}
+		d, err := yenc.Decode(f)
+		if err != nil {
+			fmt.Print(err)
+		}
+
+		fmt.Println("Successful Decode: " + d.Header().Name)
+	*/
+
 }
