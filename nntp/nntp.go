@@ -114,8 +114,7 @@ func FetchSegment(segment Types.Segment) (Types.Segment, error) {
 	readBuf := make([]byte, segment.Article.Bytes/2)
 	segmentBuf := []byte("")
 	conn := segment.Connection
-	//	fmt.Print("Fetching segment: " + segmentId + "Size: " + strconv.Itoa(segment.Article.Bytes) + "\n")
-	// try group n if segment missing from group n-1
+
 	for i := 0; i < len(segment.Groups); i++ {
 		group := string(segment.Groups[i])
 		//	fmt.Print("Trying group: " + group + "\n")
@@ -133,8 +132,7 @@ func FetchSegment(segment Types.Segment) (Types.Segment, error) {
 			}
 			// switch based on status code in reply from server
 			status := strings.Fields(string(readBuf[:n]))[0]
-			//	fmt.Print(string(readBuf[:n]))
-			//	fmt.Println("Status: " + status)
+
 			switch status {
 			case "211": // group selected
 				// get article
@@ -158,26 +156,12 @@ func FetchSegment(segment Types.Segment) (Types.Segment, error) {
 					// append only from startIndex
 					segmentBuf = append(segmentBuf, readBuf[startIndex:n]...) // Append readBuf from startIndex to n
 				}
-
-				/*
-					// Find the index of "=ybegin" in readBuf
-
-					if startIndex != -1 {
-						segmentBuf = append(segmentBuf, readBuf[startIndex:n]...) // Append readBuf from startIndex to n
-					} else {
-						// fmt.Println("startIndex not found, unhandled")
-						// Handle the case when "=ybegin" is not found in readBuf
-						// Here, you can choose to handle the error or take an alternative action
-						// For example, you can log a message or skip appending readBuf to segmentBuf
-						panic("startIndex not found")
-					}
-
-					// if end of file
-					if bytes.Contains(readBuf, []byte("=yend")) {
-						fmt.Println("=yend found -> Returning segment")
-						return Types.Segment{segment.Article, segmentBuf, nil, nil}, nil
-					}
-				*/
+				// if we actually end here, return the segment...
+				if bytes.Contains(readBuf, []byte("=yend")) {
+					fmt.Println("default =yend found. Returning segment")
+					segmentBuf = undotStuff(segmentBuf)
+					return Types.Segment{segment.Article, segmentBuf, nil, nil}, nil
+				}
 				continue
 			case "430":
 				fmt.Print("430 no such article found\n")
@@ -197,25 +181,9 @@ func FetchSegment(segment Types.Segment) (Types.Segment, error) {
 				fmt.Println("default appending")                // unused!?
 				segmentBuf = append(segmentBuf, readBuf[:n]...) // append readBuf to segment
 
-				// print incoming data:
-				// fmt.Println(string(readBuf[:n]))
-
-				// if end of segment found, return segmentBuf containing entire segment
-
 				if bytes.Contains(readBuf, []byte("=yend")) {
 					fmt.Println("default =yend found. Returning segment")
-					// trim segmentBuf to end of =yend line
-					if idx := bytes.Index(segmentBuf, []byte("=yend")); idx != -1 {
-						end := len(segmentBuf)
-						if eol := bytes.Index(segmentBuf[idx:], []byte("\r\n")); eol != -1 {
-							end = idx + eol + 2
-						} else if eol := bytes.IndexByte(segmentBuf[idx:], '\n'); eol != -1 {
-							end = idx + eol + 1
-						}
-						segmentBuf = segmentBuf[:end]
-						fmt.Println("segmentBuff: ", string(segmentBuf))
-						// return segment with segmentBuf
-					}
+					segmentBuf = undotStuff(segmentBuf)
 					return Types.Segment{segment.Article, segmentBuf, nil, nil}, nil
 				}
 
@@ -230,4 +198,59 @@ func FetchSegment(segment Types.Segment) (Types.Segment, error) {
 
 func send(message string, conn *tls.Conn) (n int, err error) {
 	return conn.Write([]byte(message + "\r\n"))
+}
+
+// undotStuff removes NNTP dot-stuffing from the accumulated article body.
+// It also drops a lone terminator line "."
+func undotStuff(b []byte) []byte {
+	var out = make([]byte, 0, len(b))
+	atLineStart := true
+	unstuffs := 0
+	terminatorDropped := false
+	lines := 0
+
+	for i := 0; i < len(b); i++ {
+		c := b[i]
+
+		// Handle CRLF and LF as newlines
+		if c == '\r' {
+			out = append(out, '\r')
+			if i+1 < len(b) && b[i+1] == '\n' {
+				out = append(out, '\n')
+				i++
+			}
+			atLineStart = true
+			lines++
+			continue
+		}
+		if c == '\n' {
+			out = append(out, '\n')
+			atLineStart = true
+			lines++
+			continue
+		}
+
+		if atLineStart && c == '.' {
+			// Check for NNTP terminator "." followed by EOL or end
+			if i+1 == len(b) || b[i+1] == '\r' || b[i+1] == '\n' {
+				terminatorDropped = true
+				fmt.Println("undotStuffFinal: dropped NNTP terminator line")
+				break
+			}
+			// Dot-stuffed line: ".." -> emit single '.'
+			if i+1 < len(b) && b[i+1] == '.' {
+				out = append(out, '.')
+				i++
+				unstuffs++
+				atLineStart = false
+				continue
+			}
+		}
+
+		out = append(out, c)
+		atLineStart = false
+	}
+
+	fmt.Printf("undotStuff: lines=%d, unstuffs=%d, terminatorDropped=%v\n", lines, unstuffs, terminatorDropped)
+	return out
 }
