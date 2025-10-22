@@ -113,7 +113,6 @@ func FetchSegment(segment Types.Segment) (Types.Segment, error) {
 	segmentId := segment.Article.Id
 	readBuf := make([]byte, segment.Article.Bytes/2)
 	segmentBuf := []byte("")
-	readCount := 0
 	conn := segment.Connection
 	//	fmt.Print("Fetching segment: " + segmentId + "Size: " + strconv.Itoa(segment.Article.Bytes) + "\n")
 	// try group n if segment missing from group n-1
@@ -151,13 +150,17 @@ func FetchSegment(segment Types.Segment) (Types.Segment, error) {
 
 				fmt.Println("222 artical received body follows:")
 				// print incoming segment data:
-				if bytes.Contains(readBuf, []byte("=ybegin")) {
-					fmt.Println("BEGIN FOUND")
-					//	fmt.Println("default last buffer: " + string(readBuf[:n]))
+				// check for =ybegin
+				startIndex := bytes.Index(readBuf, []byte("=ybegin"))
+
+				if startIndex != -1 {
+					fmt.Println("222 START FOUND")
+					// append only from startIndex
+					segmentBuf = append(segmentBuf, readBuf[startIndex:n]...) // Append readBuf from startIndex to n
 				}
 
 				/*
-					startIndex := bytes.Index(readBuf, []byte("=ybegin")) // Find the index of "=ybegin" in readBuf
+					// Find the index of "=ybegin" in readBuf
 
 					if startIndex != -1 {
 						segmentBuf = append(segmentBuf, readBuf[startIndex:n]...) // Append readBuf from startIndex to n
@@ -182,14 +185,17 @@ func FetchSegment(segment Types.Segment) (Types.Segment, error) {
 			default:
 				// prior status was 220, or segment data so save
 
-				if bytes.Contains(readBuf, []byte("=ybegin")) {
-					fmt.Println("BEGIN FOUND")
-					//	fmt.Println("default last buffer: " + string(readBuf[:n]))
+				startIndex := bytes.Index(readBuf, []byte("=ybegin"))
+
+				if startIndex != -1 {
+					fmt.Println("DEFAULT START FOUND")
+					// append only from startIndex
+					segmentBuf = append(segmentBuf, readBuf[startIndex:n]...) // Append readBuf from startIndex to n
+					continue
 				}
 
-				readCount += n                                  // unused!?
+				fmt.Println("default appending")                // unused!?
 				segmentBuf = append(segmentBuf, readBuf[:n]...) // append readBuf to segment
-				fmt.Println("default appending: ")
 
 				// print incoming data:
 				// fmt.Println(string(readBuf[:n]))
@@ -198,7 +204,18 @@ func FetchSegment(segment Types.Segment) (Types.Segment, error) {
 
 				if bytes.Contains(readBuf, []byte("=yend")) {
 					fmt.Println("default =yend found. Returning segment")
-					//	fmt.Println("default last buffer: " + string(readBuf[:n]))
+					// trim segmentBuf to end of =yend line
+					if idx := bytes.Index(segmentBuf, []byte("=yend")); idx != -1 {
+						end := len(segmentBuf)
+						if eol := bytes.Index(segmentBuf[idx:], []byte("\r\n")); eol != -1 {
+							end = idx + eol + 2
+						} else if eol := bytes.IndexByte(segmentBuf[idx:], '\n'); eol != -1 {
+							end = idx + eol + 1
+						}
+						segmentBuf = segmentBuf[:end]
+						fmt.Println("segmentBuff: ", string(segmentBuf))
+						// return segment with segmentBuf
+					}
 					return Types.Segment{segment.Article, segmentBuf, nil, nil}, nil
 				}
 
