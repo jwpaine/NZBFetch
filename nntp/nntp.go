@@ -143,7 +143,7 @@ func FetchSegment(segment Types.Segment) (Types.Segment, error) {
 				continue
 			case "411": // no such group
 				fmt.Println("No such group: " + group)
-				break
+				continue
 			case "222": // Body follows
 
 				fmt.Println("222 artical received body follows:")
@@ -165,7 +165,7 @@ func FetchSegment(segment Types.Segment) (Types.Segment, error) {
 				continue
 			case "430":
 				fmt.Print("430 no such article found\n")
-				break
+				continue
 			default:
 				// prior status was 220, or segment data so save
 
@@ -186,11 +186,8 @@ func FetchSegment(segment Types.Segment) (Types.Segment, error) {
 					segmentBuf = undotStuff(segmentBuf)
 					return Types.Segment{segment.Article, segmentBuf, nil, nil}, nil
 				}
-
-				continue
 			}
 
-			break
 		}
 	}
 	return segment, errors.New("Segment not found in any group")

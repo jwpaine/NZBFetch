@@ -73,125 +73,23 @@ func write(segment Types.Segment) {
 	}
 	fmt.Println("Decoded: Filename", part.Name)
 
-	//	fmt.Println("Body Bytes", part.Body)
-
-	// var b bytes.Buffer
-	// write yenc to disk
-	/*	err := ioutil.WriteFile("test.yenc", segment.Data, 0644)
-			if err != nil {
-				fmt.Print(err)
-				return
-			}
-
-			dec, err := os.Open("test.yenc")
-			if err != nil {
-				fmt.Print(err)
-				return
-			}
-
-
-		out, err := os.OpenFile(yread.Filename, os.O_APPEND|os.O_WRONLY, 0600)
-		if err != nil {
-			fmt.Println("open " + yread.Filename + " Failed")
-			return
-		}
-
-		fmt.Println("open " + yread.Filename + " SUCCESS")
-
-		_, err = io.Copy(out, yread)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			return
-		}
-
-		fmt.Println("Successful write part: " + yread.Filename)
-
-
-	*/
-
-	// buf1, err := ioutil.ReadAll(yenc)
-
-	/***********************/
-
-	/* d, err := yenc.Decode(f) // , yenc.DecodeWithBufferSize(20)
-
+	// open file to append binary data
+	safeName := sanitizeFilename(part.Name)
+	f, err := os.OpenFile(safeName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		fmt.Print("error decoding segment")
+		fmt.Print(err)
 		return
-		//	panic(err)
-
 	}
+	defer f.Close()
 
-	fmt.Println("Decoded: " + d.Header().Name)
-
-	_, err = io.Copy(&b, d)
-
+	// write binary data to file
+	_, err = f.Write(part.Body)
 	if err != nil {
-		fmt.Print("error copying to memory")
+		fmt.Print(err)
 		return
 	}
 
-	fmt.Print("Copied decoded to memory")
-
-	*/
-
-	/*
-		_, err = io.Copy(&b, d)
-
-		if err != nil {
-			fmt.Print(err)
-			return
-		}
-
-		fmt.Print("Copied decoded to memory")
-
-		if _, err := os.Stat(d.Header().Name); os.IsNotExist(err) {
-			_, err := os.Create(d.Header().Name)
-			if err != nil {
-				panic(err)
-			}
-		}
-
-		out, err := os.OpenFile(d.Header().Name, os.O_APPEND|os.O_WRONLY, 0600)
-		if err != nil {
-			panic(err)
-		}
-
-		fmt.Println("Opened file for writing: " + d.Header().Name)
-
-		_, err = b.WriteTo(out)
-		if err != nil {
-			// Handle the error
-			fmt.Println("Failed to write buffer to file:", err)
-			return
-		}
-
-		fmt.Println("Buffer contents written to file successfully.")
-
-	*/
-
-	/*
-		part, err := yenc.Decode(f)
-		if err != nil {
-			fmt.Print(err)
-		}
-		fmt.Println("Successful Decode: " + string(part.Header().Name))
-		// write decoded part to disk
-		// if file does not exist, create it
-		if _, err := os.Stat(string(part.Header().Name)); os.IsNotExist(err) {
-			_, err := os.Create(string(part.Header().Name))
-			if err != nil {
-				panic(err)
-			}
-		}
-		// open file
-		out, err := os.OpenFile(string(part.Header().Name), os.O_APPEND|os.O_WRONLY, 0600)
-		if err != nil {
-			panic(err)
-		}
-		defer f.Close()
-		out.Write(part.)
-		fmt.Print("Written") */
+	fmt.Println("Successfully wrote segment to " + safeName)
 
 }
 
