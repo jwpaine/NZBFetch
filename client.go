@@ -1,11 +1,8 @@
 package main
 
 import (
-	"bufio"
 	"crypto/tls"
 	"fmt"
-
-	"io/ioutil"
 	"log"
 	"os"
 	"strconv"
@@ -13,21 +10,16 @@ import (
 
 	"github.com/BurntSushi/toml" // config as Tom's Obvious, Minimal Language
 	"github.com/chrisfarms/yenc"
+
 	//	"gopkg.in/yenc.v0"
 	// decode yenc
+	NNTP "nzbfetch/nntp"
+	NZB "nzbfetch/nzb"
+	Types "nzbfetch/types"
 )
 
-type Config struct {
-	Address     string
-	Port        string
-	Secure      string
-	Username    string
-	Password    string
-	Connections int
-}
-
-func loadConfig() (conf Config, err error) {
-	b, err := ioutil.ReadFile("client.conf") // just pass the file name
+func loadConfig() (conf Types.Config, err error) {
+	b, err := os.ReadFile("client.conf") // just pass the file name
 	if err != nil {
 		fmt.Print(err)
 		return
@@ -45,11 +37,11 @@ func loadConfig() (conf Config, err error) {
 workers take a connection c and a job j from respective pools,
 fetch segment, and send segment to results channel where it's read by the download function
 */
-func worker(id int, jobs <-chan Segment, con <-chan *tls.Conn, results chan<- Segment) {
+func worker(id int, jobs <-chan Types.Segment, con <-chan *tls.Conn, results chan<- Types.Segment) {
 	for c := range con {
 		for j := range jobs {
 			j.Connection = c
-			segment, err := fetchSegment(j)
+			segment, err := NNTP.FetchSegment(j)
 			if err != nil {
 				fmt.Print(err)
 			}
@@ -61,9 +53,9 @@ func worker(id int, jobs <-chan Segment, con <-chan *tls.Conn, results chan<- Se
 /*
 write yenc file to disk, decode, append binary data
 */
-func write(segment Segment) {
+func write(segment Types.Segment) {
 
-	err := ioutil.WriteFile("test.yenc", segment.Data, 0644)
+	err := os.WriteFile("test.yenc", segment.Data, 0644)
 	if err != nil {
 		fmt.Print(err)
 		return
@@ -80,6 +72,7 @@ func write(segment Segment) {
 		panic("decoding: " + err.Error())
 	}
 	fmt.Println("Decoded: Filename", part.Name)
+
 	//	fmt.Println("Body Bytes", part.Body)
 
 	// var b bytes.Buffer
@@ -220,9 +213,9 @@ func sanitizeFilename(filename string) string {
 /*
 manage the download of files and segments contained in a single nzb file
 */
-func download(nzb *Nzb, fileBegin int, segmentBegin int, connections chan *tls.Conn, maxWorkers int) {
-	jobs := make(chan Segment, 200)
-	results := make(chan Segment, 100)
+func download(nzb *NZB.Nzb, fileBegin int, segmentBegin int, connections chan *tls.Conn, maxWorkers int) {
+	jobs := make(chan Types.Segment, 200)
+	results := make(chan Types.Segment, 100)
 
 	for w := 1; w <= maxWorkers; w++ { // 3 connections
 		go worker(w, jobs, connections, results)
@@ -230,13 +223,13 @@ func download(nzb *Nzb, fileBegin int, segmentBegin int, connections chan *tls.C
 	// for each file in nzb
 	for i := fileBegin; i < len(nzb.Files); i++ {
 		// create map to keep track of out-of-order segments
-		segmentMap := make(map[int]Segment)
+		segmentMap := make(map[int]Types.Segment)
 		var expected = 1
 		// for each segment
 		fmt.Println("Working on new File: " + nzb.Files[i].Subject)
 		// add each segment to jobs pool
 		for j := segmentBegin; j < len(nzb.Files[i].Segments); j++ {
-			jobs <- Segment{nzb.Files[i].Segments[j], nil, nil, nzb.Files[i].Groups}
+			jobs <- Types.Segment{nzb.Files[i].Segments[j], nil, nil, nzb.Files[i].Groups}
 		}
 		for {
 			segment := <-results
@@ -294,18 +287,18 @@ func manager() {
 	*/
 	connections := make(chan *tls.Conn, 20)
 	for c := 1; c <= maxConnections; c++ {
-		connections <- connect(config)
+		connections <- NNTP.Connect(config)
 	}
 	/*
 		load NZB file(s) from disk
 	*/
 	fmt.Print("Loading next nzb file...")
-	b, err := ioutil.ReadFile("test.nzb") // just pass the file name
+	b, err := os.ReadFile("test.nzb") // just pass the file name
 	if err != nil {
 		panic(err)
 	}
 	fmt.Println("Successfully Opened test.nzb")
-	nzb, err := NewString(string(b)) // marshal, returning pointer to nzb object
+	nzb, err := NZB.NewString(string(b)) // marshal, returning pointer to nzb object
 	if err != nil {
 		panic(err)
 	}
@@ -319,19 +312,10 @@ func manager() {
 func main() {
 
 	log.SetFlags(log.Lshortfile)
-	scanner := bufio.NewScanner(os.Stdin)
+
 	go manager()
 
-	for scanner.Scan() {
-		text := scanner.Text()
-		tokens := strings.Fields(text)
-		if tokens[0] == "/pause" {
-			fmt.Print("Pausing all downloads \n")
-		}
-	}
-	if scanner.Err() != nil {
-		// handle error.
-	}
+	select {} // block forever
 
 	// test decode
 	/*	f, err := os.Open("test.yenc")

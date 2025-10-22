@@ -37,7 +37,7 @@
    503 program fault - command not performed
 */
 
-package main
+package nntp
 
 import (
 	"bytes"
@@ -45,15 +45,9 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	Types "nzbfetch/types"
 	"strings"
 )
-
-type Segment struct {
-	Article    NzbSegment // meta data from NZB
-	Data       []byte     // data after download
-	Connection *tls.Conn
-	Groups     []string
-}
 
 func authenticate(username string, password string, conn *tls.Conn) (n int, err error) {
 	n, err = send("AUTHINFO USER "+username, conn)
@@ -66,7 +60,7 @@ func authenticate(username string, password string, conn *tls.Conn) (n int, err 
 	}
 	return
 }
-func connect(config Config) (conn *tls.Conn) {
+func Connect(config Types.Config) (conn *tls.Conn) {
 	conf := &tls.Config{
 		InsecureSkipVerify: false,
 	}
@@ -114,7 +108,7 @@ func connect(config Config) (conn *tls.Conn) {
 
 }
 
-func fetchSegment(segment Segment) (Segment, error) {
+func FetchSegment(segment Types.Segment) (Types.Segment, error) {
 
 	segmentId := segment.Article.Id
 	readBuf := make([]byte, segment.Article.Bytes/2)
@@ -155,40 +149,57 @@ func fetchSegment(segment Segment) (Segment, error) {
 				break
 			case "222": // Body follows
 
-				fmt.Println("222 appending")
-
-				startIndex := bytes.Index(readBuf, []byte("=ybegin")) // Find the index of "=ybegin" in readBuf
-
-				if startIndex != -1 {
-					segmentBuf = append(segmentBuf, readBuf[startIndex:n]...) // Append readBuf from startIndex to n
-				} else {
-					// fmt.Println("startIndex not found, unhandled")
-					// Handle the case when "=ybegin" is not found in readBuf
-					// Here, you can choose to handle the error or take an alternative action
-					// For example, you can log a message or skip appending readBuf to segmentBuf
-					panic("startIndex not found")
+				fmt.Println("222 artical received body follows:")
+				// print incoming segment data:
+				if bytes.Contains(readBuf, []byte("=ybegin")) {
+					fmt.Println("BEGIN FOUND")
+					//	fmt.Println("default last buffer: " + string(readBuf[:n]))
 				}
 
-				// if end of file
-				if bytes.Contains(readBuf, []byte("=yend")) {
-					fmt.Println("=yend found -> Returning segment")
-					return Segment{segment.Article, segmentBuf, nil, nil}, nil
-				}
+				/*
+					startIndex := bytes.Index(readBuf, []byte("=ybegin")) // Find the index of "=ybegin" in readBuf
+
+					if startIndex != -1 {
+						segmentBuf = append(segmentBuf, readBuf[startIndex:n]...) // Append readBuf from startIndex to n
+					} else {
+						// fmt.Println("startIndex not found, unhandled")
+						// Handle the case when "=ybegin" is not found in readBuf
+						// Here, you can choose to handle the error or take an alternative action
+						// For example, you can log a message or skip appending readBuf to segmentBuf
+						panic("startIndex not found")
+					}
+
+					// if end of file
+					if bytes.Contains(readBuf, []byte("=yend")) {
+						fmt.Println("=yend found -> Returning segment")
+						return Types.Segment{segment.Article, segmentBuf, nil, nil}, nil
+					}
+				*/
 				continue
 			case "430":
 				fmt.Print("430 no such article found\n")
 				break
 			default:
 				// prior status was 220, or segment data so save
+
+				if bytes.Contains(readBuf, []byte("=ybegin")) {
+					fmt.Println("BEGIN FOUND")
+					//	fmt.Println("default last buffer: " + string(readBuf[:n]))
+				}
+
 				readCount += n                                  // unused!?
 				segmentBuf = append(segmentBuf, readBuf[:n]...) // append readBuf to segment
-				fmt.Println("default appending")
+				fmt.Println("default appending: ")
+
+				// print incoming data:
+				// fmt.Println(string(readBuf[:n]))
+
 				// if end of segment found, return segmentBuf containing entire segment
 
 				if bytes.Contains(readBuf, []byte("=yend")) {
 					fmt.Println("default =yend found. Returning segment")
 					//	fmt.Println("default last buffer: " + string(readBuf[:n]))
-					return Segment{segment.Article, segmentBuf, nil, nil}, nil
+					return Types.Segment{segment.Article, segmentBuf, nil, nil}, nil
 				}
 
 				continue

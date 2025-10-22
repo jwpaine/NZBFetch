@@ -1,9 +1,11 @@
-package main
+package nzb
 
 import (
-	"encoding/xml"
 	"bytes"
+	"encoding/xml"
 	"io"
+
+	"golang.org/x/net/html/charset"
 )
 
 // a slice of NzbFiles extended to allow sorting
@@ -25,7 +27,9 @@ func NewString(data string) (*Nzb, error) {
 func New(buf io.Reader) (*Nzb, error) {
 
 	xnzb := new(xNzb)
-	err := xml.NewDecoder(buf).Decode(xnzb)
+	decoder := xml.NewDecoder(buf)
+	decoder.CharsetReader = charset.NewReaderLabel
+	err := decoder.Decode(xnzb)
 	if err != nil {
 		return nil, err
 	}
