@@ -146,21 +146,21 @@ func FetchSegment(segment Types.Segment) (Types.Segment, error) {
 				continue
 			case "222": // Body follows
 
-				fmt.Println("222 artical received body follows:")
+				//fmt.Println("222 artical received body follows:")
 				// print incoming segment data:
 				// check for =ybegin
 				startIndex := bytes.Index(readBuf, []byte("=ybegin"))
 
 				if startIndex != -1 {
-					fmt.Println("222 START FOUND")
+					//fmt.Println("222 START FOUND")
 					// append only from startIndex
 					segmentBuf = append(segmentBuf, readBuf[startIndex:n]...) // Append readBuf from startIndex to n
 				}
 				// if we actually end here, return the segment...
 				if bytes.Contains(readBuf, []byte("=yend")) {
-					fmt.Println("default =yend found. Returning segment")
+					//fmt.Println("222 =yend found. Returning segment")
 					segmentBuf = undotStuff(segmentBuf)
-					return Types.Segment{segment.Article, segmentBuf, nil, nil}, nil
+					return Types.Segment{Article: segment.Article, Data: segmentBuf}, nil
 				}
 				continue
 			case "430":
@@ -172,17 +172,17 @@ func FetchSegment(segment Types.Segment) (Types.Segment, error) {
 				startIndex := bytes.Index(readBuf, []byte("=ybegin"))
 
 				if startIndex != -1 {
-					fmt.Println("DEFAULT START FOUND")
+					// fmt.Println("DEFAULT START FOUND")
 					// append only from startIndex
 					segmentBuf = append(segmentBuf, readBuf[startIndex:n]...) // Append readBuf from startIndex to n
 					continue
 				}
 
-				fmt.Println("default appending")                // unused!?
+				// fmt.Println("default appending")                // unused!?
 				segmentBuf = append(segmentBuf, readBuf[:n]...) // append readBuf to segment
 
 				if bytes.Contains(readBuf, []byte("=yend")) {
-					fmt.Println("default =yend found. Returning segment")
+					fmt.Println("Returning segment: " + segmentId)
 					segmentBuf = undotStuff(segmentBuf)
 					return Types.Segment{segment.Article, segmentBuf, nil, nil}, nil
 				}
@@ -203,7 +203,7 @@ func undotStuff(b []byte) []byte {
 	var out = make([]byte, 0, len(b))
 	atLineStart := true
 	unstuffs := 0
-	terminatorDropped := false
+	// terminatorDropped := false
 	lines := 0
 
 	for i := 0; i < len(b); i++ {
@@ -230,8 +230,8 @@ func undotStuff(b []byte) []byte {
 		if atLineStart && c == '.' {
 			// Check for NNTP terminator "." followed by EOL or end
 			if i+1 == len(b) || b[i+1] == '\r' || b[i+1] == '\n' {
-				terminatorDropped = true
-				fmt.Println("undotStuffFinal: dropped NNTP terminator line")
+				// terminatorDropped = true
+				// fmt.Println("undotStuffFinal: dropped NNTP terminator line")
 				break
 			}
 			// Dot-stuffed line: ".." -> emit single '.'
@@ -248,6 +248,6 @@ func undotStuff(b []byte) []byte {
 		atLineStart = false
 	}
 
-	fmt.Printf("undotStuff: lines=%d, unstuffs=%d, terminatorDropped=%v\n", lines, unstuffs, terminatorDropped)
+	// fmt.Printf("undotStuff: lines=%d, unstuffs=%d, terminatorDropped=%v\n", lines, unstuffs, terminatorDropped)
 	return out
 }

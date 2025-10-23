@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/tls"
 	"fmt"
 	"log"
@@ -42,6 +43,7 @@ func worker(id int, jobs <-chan Types.Segment, con <-chan *tls.Conn, results cha
 		for j := range jobs {
 			j.Connection = c
 			segment, err := NNTP.FetchSegment(j)
+			fmt.Println("Worker", id, "fetched segment number:", segment.Article.Number)
 			if err != nil {
 				fmt.Print(err)
 			}
@@ -53,29 +55,18 @@ func worker(id int, jobs <-chan Types.Segment, con <-chan *tls.Conn, results cha
 /*
 write yenc file to disk, decode, append binary data
 */
-func write(segment Types.Segment) {
+func write(segment Types.Segment, outName string) {
 
-	err := os.WriteFile("test.yenc", segment.Data, 0644)
-	if err != nil {
-		fmt.Print(err)
-		return
-	}
-
-	d, err := os.Open("test.yenc")
-	if err != nil {
-		fmt.Print(err)
-		return
-	}
-
-	part, err := yenc.Decode(d)
+	// Decode directly from memory to avoid temp file and contention
+	part, err := yenc.Decode(bytes.NewReader(segment.Data))
 	if err != nil {
 		panic("decoding: " + err.Error())
 	}
 	fmt.Println("Decoded: Filename", part.Name)
 
 	// open file to append binary data
-	safeName := sanitizeFilename(part.Name)
-	f, err := os.OpenFile(safeName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	safeName := sanitizeFilename(outName)
+	f, err := os.OpenFile("processed/"+safeName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		fmt.Print(err)
 		return
@@ -108,6 +99,23 @@ func sanitizeFilename(filename string) string {
 	return filename
 }
 
+// filenameFromSubject extracts the quoted filename from an NZB subject.
+// Falls back to the whole subject if no quotes are found.
+func filenameFromSubject(subject string) string {
+	// Handle HTML entity for quotes just in case
+	s := strings.ReplaceAll(subject, "&quot;", "\"")
+	start := strings.IndexByte(s, '"')
+	if start == -1 {
+		return strings.TrimSpace(s)
+	}
+	rest := s[start+1:]
+	end := strings.IndexByte(rest, '"')
+	if end == -1 {
+		return strings.TrimSpace(rest)
+	}
+	return strings.TrimSpace(rest[:end])
+}
+
 /*
 manage the download of files and segments contained in a single nzb file
 */
@@ -125,38 +133,53 @@ func download(nzb *NZB.Nzb, fileBegin int, segmentBegin int, connections chan *t
 		var expected = 1
 		// for each segment
 		fmt.Println("Working on new File: " + nzb.Files[i].Subject)
-		// add each segment to jobs pool
-		for j := segmentBegin; j < len(nzb.Files[i].Segments); j++ {
-			jobs <- Types.Segment{nzb.Files[i].Segments[j], nil, nil, nzb.Files[i].Groups}
-		}
+		// Derive the target output filename from the NZB subject
+		targetName := filenameFromSubject(nzb.Files[i].Subject)
+
+		// add each segment to jobs pool in a separate goroutine to avoid blocking
+		enqueueDone := make(chan struct{})
+		go func(fileIdx int) {
+			defer close(enqueueDone)
+			for j := segmentBegin; j < len(nzb.Files[fileIdx].Segments); j++ {
+				jobs <- Types.Segment{Article: nzb.Files[fileIdx].Segments[j], Groups: nzb.Files[fileIdx].Groups}
+			}
+		}(i)
 		for {
 			segment := <-results
-			size := len(segment.Data)
-			fmt.Println("Got segment: " + segment.Article.Id + " Article expected size (bytes): " + strconv.Itoa(segment.Article.Bytes))
-			fmt.Printf("Actual Size of segment.Data: %d\n", size)
+			// size := len(segment.Data)
+			//fmt.Println("Got segment: " + segment.Article.Id + " Article expected size (bytes): " + strconv.Itoa(segment.Article.Bytes))
+			//fmt.Printf("Actual Size of segment.Data: %d\n", size)
 
 			if segment.Article.Number == expected {
-				fmt.Println("Segment " + strconv.Itoa(expected) + " expected, writing to disk")
-				write(segment)
+				// fmt.Println("Segment " + strconv.Itoa(expected) + " expected, writing to disk")
+				write(segment, targetName)
 				expected++
+				// update progress after advancing expected
+
 				// write segments stored in memory:
 				for expected < len(nzb.Files[i].Segments)+1 {
-					fmt.Println("Checking memory")
+					// fmt.Println("Checking memory")
 					j := segmentMap[expected]
 					// if next segment not found in memory
 					if j.Article.Number == 0 {
-						fmt.Println("next segment not found in memory")
+						// fmt.Println("next segment not found in memory")
 						break
 					}
 					// if found, write to disk
-					fmt.Println("Found segment " + strconv.Itoa(expected) + " in memory, writing")
-					write(j)
+					// fmt.Println("Found segment " + strconv.Itoa(expected) + " in memory, writing")
+					write(j, targetName)
 					delete(segmentMap, expected)
 					expected++
+					// update progress after advancing expected
+
 				}
 				// check if this is last segment
 				if expected > len(nzb.Files[i].Segments) {
 					fmt.Println("This is last segment")
+					// ensure the enqueuer finished before moving to the next file
+					<-enqueueDone
+					// finalize progress line at 100%
+
 					break
 				}
 				continue
