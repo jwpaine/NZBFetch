@@ -8,6 +8,9 @@ import (
 	"log"
 	Types "nzbfetch/types"
 	"strings"
+
+	"bufio"
+	"io"
 )
 
 func authenticate(username string, password string, conn *tls.Conn) (n int, err error) {
@@ -62,6 +65,7 @@ func FetchSegment(segment Types.Segment) (Types.Segment, error) {
 	segmentId := segment.Article.Id
 	conn := segment.Connection
 	readBuf := make([]byte, 4096)
+	reader := bufio.NewReaderSize(conn, 256*1024)
 	segmentBuf := make([]byte, 0, segment.Article.Bytes)
 
 	for _, group := range segment.Groups {
@@ -71,7 +75,7 @@ func FetchSegment(segment Types.Segment) (Types.Segment, error) {
 		}
 
 		for {
-			n, err := conn.Read(readBuf)
+			n, err := reader.Read(readBuf)
 			if err != nil {
 				return segment, err
 			}
@@ -80,6 +84,7 @@ func FetchSegment(segment Types.Segment) (Types.Segment, error) {
 				status := statusFields[0]
 				switch status {
 				case "211":
+					fmt.Println("Searching for article in group: " + group)
 					_, err := send("BODY <"+segmentId+">", conn)
 					if err != nil {
 						return segment, err
@@ -98,7 +103,7 @@ func FetchSegment(segment Types.Segment) (Types.Segment, error) {
 			if bytes.Contains(readBuf, []byte("=ybegin")) {
 				// Start of yEnc body
 				bodyBuf := readBuf
-				segmentBuf, err = readBodyOnTheFly(conn, bodyBuf)
+				segmentBuf, err = readBodyOnTheFly(reader, bodyBuf)
 				if err != nil {
 					return segment, err
 				}
@@ -112,27 +117,26 @@ func FetchSegment(segment Types.Segment) (Types.Segment, error) {
 
 // readBodyOnTheFly reads NNTP body and undot-stuffs as data arrives.
 // Stops when terminator "." line or "=yend" marker found.
-func readBodyOnTheFly(conn *tls.Conn, initial []byte) ([]byte, error) {
+
+func readBodyOnTheFly(reader *bufio.Reader, initial []byte) ([]byte, error) {
 	buf := make([]byte, 4096)
 	out := make([]byte, 0, len(initial)+4096)
 	atLineStart := true
 	prevCR := false
 
-	// process initial buffer (could contain partial body)
 	out = append(out, processNNTPChunk(initial, &atLineStart, &prevCR)...)
 
 	for {
-		n, err := conn.Read(buf)
+		n, err := reader.Read(buf)
 		if n > 0 {
 			chunk := buf[:n]
 			out = append(out, processNNTPChunk(chunk, &atLineStart, &prevCR)...)
-			// detect =yend marker
 			if bytes.Contains(out, []byte("=yend")) {
 				break
 			}
 		}
 		if err != nil {
-			if strings.Contains(err.Error(), "EOF") {
+			if err == io.EOF {
 				break
 			}
 			return out, err
