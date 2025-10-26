@@ -82,7 +82,7 @@ type NzbFile struct {
 
 type NzbSegment struct {
 	XMLName xml.Name `xml:"segment"`
-	Bytes   int      `xml:"bytes,attr"`
+	Bytes   int64    `xml:"bytes,attr"`
 	Number  int      `xml:"number,attr"`
 	Id      string   `xml:",innerxml"`
 }

@@ -43,7 +43,7 @@ func worker(id int, jobs <-chan Types.Segment, con <-chan *tls.Conn, results cha
 		for j := range jobs {
 			j.Connection = c
 			segment, err := NNTP.FetchSegment(j)
-			fmt.Println("Worker", id, "fetched segment number:", segment.Article.Number)
+			// fmt.Println("Worker", id, "fetched segment number:", segment.Article.Number)
 			if err != nil {
 				fmt.Print(err)
 			}
@@ -62,7 +62,7 @@ func write(segment Types.Segment, outName string) {
 	if err != nil {
 		panic("decoding: " + err.Error())
 	}
-	fmt.Println("Decoded: Filename", part.Name)
+	// fmt.Println("Decoded: Filename", part.Name)
 
 	// open file to append binary data
 	safeName := sanitizeFilename(outName)
@@ -80,7 +80,7 @@ func write(segment Types.Segment, outName string) {
 		return
 	}
 
-	fmt.Println("Successfully wrote segment to " + safeName)
+	// fmt.Println("Successfully wrote segment to " + safeName)
 
 }
 
@@ -92,7 +92,6 @@ func sanitizeFilename(filename string) string {
 	for _, char := range invalidChars {
 		filename = strings.ReplaceAll(filename, char, "_")
 	}
-
 	// Remove whitespace from the filename
 	filename = strings.TrimSpace(filename)
 
@@ -127,7 +126,8 @@ func download(nzb *NZB.Nzb, fileBegin int, segmentBegin int, connections chan *t
 		go worker(w, jobs, connections, results)
 	}
 	totalSize := NZB.GetTotalSize(nzb)
-	fmt.Printf("Total NZB size: %d bytes\n", totalSize)
+	bytesRemaining := totalSize
+	fmt.Printf("Total NZB size: %d bytes\n", bytesRemaining)
 	// for each file in nzb
 	for i := fileBegin; i < len(nzb.Files); i++ {
 		// create map to keep track of out-of-order segments
@@ -148,27 +148,23 @@ func download(nzb *NZB.Nzb, fileBegin int, segmentBegin int, connections chan *t
 		}(i)
 		for {
 			segment := <-results
-			// size := len(segment.Data)
-			//fmt.Println("Got segment: " + segment.Article.Id + " Article expected size (bytes): " + strconv.Itoa(segment.Article.Bytes))
-			//fmt.Printf("Actual Size of segment.Data: %d\n", size)
-
+			// process new segment
 			if segment.Article.Number == expected {
-				// fmt.Println("Segment " + strconv.Itoa(expected) + " expected, writing to disk")
 				write(segment, targetName)
 				expected++
-				// update progress after advancing expected
-
 				// write segments stored in memory:
 				for expected < len(nzb.Files[i].Segments)+1 {
-					// fmt.Println("Checking memory")
 					j := segmentMap[expected]
 					// if next segment not found in memory
 					if j.Article.Number == 0 {
-						// fmt.Println("next segment not found in memory")
 						break
 					}
-					// if found, write to disk
-					// fmt.Println("Found segment " + strconv.Itoa(expected) + " in memory, writing")
+					// print bytes remaining
+					bytesRemaining -= j.Article.Bytes
+					// fmt.Printf("Bytes remaining: %d\n", bytesRemaining)
+					percentDone := float64(totalSize-bytesRemaining) / float64(totalSize) * 100
+					fmt.Printf("Progress: %.2f%%\n", percentDone)
+					// write segment
 					write(j, targetName)
 					delete(segmentMap, expected)
 					expected++
@@ -177,11 +173,8 @@ func download(nzb *NZB.Nzb, fileBegin int, segmentBegin int, connections chan *t
 				}
 				// check if this is last segment
 				if expected > len(nzb.Files[i].Segments) {
-					// fmt.Println("This is last segment")
 					// ensure the enqueuer finished before moving to the next file
 					<-enqueueDone
-					// finalize progress line at 100%
-
 					break
 				}
 				continue
@@ -210,7 +203,13 @@ func manager() {
 	*/
 	connections := make(chan *tls.Conn, 20)
 	for c := 1; c <= maxConnections; c++ {
-		connections <- NNTP.Connect(config)
+		connection, err := NNTP.Connect(config)
+		if err != nil {
+			fmt.Print(err)
+			return
+		}
+		fmt.Printf("Connection %d established\n", c)
+		connections <- connection
 	}
 	/*
 		load NZB file(s) from disk
@@ -239,19 +238,5 @@ func main() {
 	go manager()
 
 	select {} // block forever
-
-	// test decode
-	/*	f, err := os.Open("test.yenc")
-		if err != nil {
-			fmt.Print(err)
-			return
-		}
-		d, err := yenc.Decode(f)
-		if err != nil {
-			fmt.Print(err)
-		}
-
-		fmt.Println("Successful Decode: " + d.Header().Name)
-	*/
 
 }

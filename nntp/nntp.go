@@ -60,7 +60,7 @@ func authenticate(username string, password string, conn *tls.Conn) (n int, err 
 	}
 	return
 }
-func Connect(config Types.Config) (conn *tls.Conn) {
+func Connect(config Types.Config) (conn *tls.Conn, _ error) {
 	conf := &tls.Config{
 		InsecureSkipVerify: false,
 	}
@@ -70,7 +70,7 @@ func Connect(config Types.Config) (conn *tls.Conn) {
 	conn, err := tls.Dial("tcp", config.Address+":"+config.Port, conf)
 	if err != nil {
 		log.Println(conn, err)
-		return
+		return nil, err
 	}
 	// wait for server to be ready (STATUS CODE 200) and Authenticated (STATUS 281)
 	for {
@@ -78,31 +78,28 @@ func Connect(config Types.Config) (conn *tls.Conn) {
 		buf := make([]byte, 100)
 		n, err := conn.Read(buf)
 		if err != nil {
-			conn = nil
-			return
+			return nil, err
 		}
 		// tokenize message by space
 		tokens := strings.Fields(string(buf[:n]))
 		// if ready
 		if tokens[0] == "200" || tokens[0] == "201" {
-			fmt.Print("Server ready\n")
+			// fmt.Print("Server ready\n")
 			// authenticate user
 			n, err := authenticate(config.Username, config.Password, conn)
 			if err != nil {
 				log.Println(n, err)
-				conn = nil
-				return
+				return nil, err
 			}
 		}
 		if tokens[0] == "502" {
 			fmt.Print("Login failed\n")
-			conn = nil
-			return
+			return nil, errors.New("Authentication failed")
 		}
 
 		if tokens[0] == "281" {
-			fmt.Print("Login Success!\n")
-			return
+			// login success
+			return conn, nil
 		}
 	}
 
@@ -117,7 +114,6 @@ func FetchSegment(segment Types.Segment) (Types.Segment, error) {
 
 	for i := 0; i < len(segment.Groups); i++ {
 		group := string(segment.Groups[i])
-		//	fmt.Print("Trying group: " + group + "\n")
 		_, err := send("GROUP "+group, conn)
 		if err != nil {
 			return segment, err
@@ -145,20 +141,15 @@ func FetchSegment(segment Types.Segment) (Types.Segment, error) {
 				fmt.Println("No such group: " + group)
 				continue
 			case "222": // Body follows
-
-				//fmt.Println("222 artical received body follows:")
-				// print incoming segment data:
 				// check for =ybegin
 				startIndex := bytes.Index(readBuf, []byte("=ybegin"))
 
+				// start found
 				if startIndex != -1 {
-					//fmt.Println("222 START FOUND")
-					// append only from startIndex
 					segmentBuf = append(segmentBuf, readBuf[startIndex:n]...) // Append readBuf from startIndex to n
 				}
 				// if we actually end here, return the segment...
 				if bytes.Contains(readBuf, []byte("=yend")) {
-					//fmt.Println("222 =yend found. Returning segment")
 					segmentBuf = undotStuff(segmentBuf)
 					return Types.Segment{Article: segment.Article, Data: segmentBuf}, nil
 				}
@@ -170,19 +161,16 @@ func FetchSegment(segment Types.Segment) (Types.Segment, error) {
 				// prior status was 220, or segment data so save
 
 				startIndex := bytes.Index(readBuf, []byte("=ybegin"))
-
+				// start found
 				if startIndex != -1 {
-					// fmt.Println("DEFAULT START FOUND")
-					// append only from startIndex
 					segmentBuf = append(segmentBuf, readBuf[startIndex:n]...) // Append readBuf from startIndex to n
 					continue
 				}
 
-				// fmt.Println("default appending")                // unused!?
 				segmentBuf = append(segmentBuf, readBuf[:n]...) // append readBuf to segment
 
+				// return segment data if we find =yend
 				if bytes.Contains(readBuf, []byte("=yend")) {
-					fmt.Println("Returning segment: " + segmentId)
 					segmentBuf = undotStuff(segmentBuf)
 					return Types.Segment{segment.Article, segmentBuf, nil, nil}, nil
 				}
@@ -230,8 +218,6 @@ func undotStuff(b []byte) []byte {
 		if atLineStart && c == '.' {
 			// Check for NNTP terminator "." followed by EOL or end
 			if i+1 == len(b) || b[i+1] == '\r' || b[i+1] == '\n' {
-				// terminatorDropped = true
-				// fmt.Println("undotStuffFinal: dropped NNTP terminator line")
 				break
 			}
 			// Dot-stuffed line: ".." -> emit single '.'
@@ -248,6 +234,5 @@ func undotStuff(b []byte) []byte {
 		atLineStart = false
 	}
 
-	// fmt.Printf("undotStuff: lines=%d, unstuffs=%d, terminatorDropped=%v\n", lines, unstuffs, terminatorDropped)
 	return out
 }
