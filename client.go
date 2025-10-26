@@ -126,6 +126,8 @@ func download(nzb *NZB.Nzb, fileBegin int, segmentBegin int, connections chan *t
 	for w := 1; w <= maxWorkers; w++ { // 3 connections
 		go worker(w, jobs, connections, results)
 	}
+	totalSize := NZB.GetTotalSize(nzb)
+	fmt.Printf("Total NZB size: %d bytes\n", totalSize)
 	// for each file in nzb
 	for i := fileBegin; i < len(nzb.Files); i++ {
 		// create map to keep track of out-of-order segments
@@ -175,7 +177,7 @@ func download(nzb *NZB.Nzb, fileBegin int, segmentBegin int, connections chan *t
 				}
 				// check if this is last segment
 				if expected > len(nzb.Files[i].Segments) {
-					fmt.Println("This is last segment")
+					// fmt.Println("This is last segment")
 					// ensure the enqueuer finished before moving to the next file
 					<-enqueueDone
 					// finalize progress line at 100%
@@ -184,7 +186,7 @@ func download(nzb *NZB.Nzb, fileBegin int, segmentBegin int, connections chan *t
 				}
 				continue
 			}
-			fmt.Println("Segment " + strconv.Itoa(expected) + " unexpected, saving to map")
+			// fmt.Println("Segment " + strconv.Itoa(expected) + " unexpected, saving to map")
 			segmentMap[segment.Article.Number] = segment
 		}
 	}

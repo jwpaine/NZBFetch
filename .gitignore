@@ -2,3 +2,5 @@ client.conf
 *.yenc
 *.jpg
 test.nzb
+.vscode/
+processed/*

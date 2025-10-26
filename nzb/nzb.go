@@ -48,6 +48,16 @@ func New(buf io.Reader) (*Nzb, error) {
 	return nzb, nil
 }
 
+func GetTotalSize(nzb *Nzb) int64 {
+	var total int64 = 0
+	for _, file := range nzb.Files {
+		for _, segment := range file.Segments {
+			total += int64(segment.Bytes)
+		}
+	}
+	return total
+}
+
 // used only for unmarshalling xml
 type xNzb struct {
 	XMLName  xml.Name   `xml:"nzb"`
