@@ -17,6 +17,12 @@ type Config struct {
 type Segment struct {
 	Article    NZB.NzbSegment // meta data from NZB
 	Data       []byte         // data after download
-	Connection *tls.Conn
+	Connection *Connection
 	Groups     []string
+	GroupUsed  string
+}
+
+type Connection struct {
+	Conn      *tls.Conn
+	LastGroup string
 }

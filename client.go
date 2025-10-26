@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/tls"
 	"fmt"
 	"log"
 	"os"
@@ -39,12 +38,14 @@ func loadConfig() (conf Types.Config, err error) {
 workers take a connection c and a job j from respective pools,
 fetch segment, and send segment to results channel where it's read by the download function
 */
-func worker(id int, jobs <-chan Types.Segment, con <-chan *tls.Conn, results chan<- Types.Segment) {
+func worker(id int, jobs <-chan Types.Segment, con <-chan *Types.Connection, results chan<- Types.Segment) {
 	for c := range con {
 		for j := range jobs {
 			j.Connection = c
 			segment, err := NNTP.FetchSegment(j)
+			// fmt.Println("received segment. Group used: " + segment.GroupUsed)
 			// fmt.Println("Worker", id, "fetched segment number:", segment.Article.Number)
+			c.LastGroup = segment.GroupUsed
 			if err != nil {
 				fmt.Print(err)
 			}
@@ -119,7 +120,7 @@ func filenameFromSubject(subject string) string {
 /*
 manage the download of files and segments contained in a single nzb file
 */
-func download(nzb *NZB.Nzb, fileBegin int, segmentBegin int, connections chan *tls.Conn, maxWorkers int) {
+func download(nzb *NZB.Nzb, fileBegin int, segmentBegin int, connections chan *Types.Connection, maxWorkers int) {
 	jobs := make(chan Types.Segment, 200)
 	results := make(chan Types.Segment, 100)
 
@@ -211,7 +212,7 @@ func manager() {
 	/*
 		make job pool and send maxConnections into pool to be multiplexed by workers
 	*/
-	connections := make(chan *tls.Conn, 20)
+	connections := make(chan *Types.Connection, maxConnections)
 	for c := 1; c <= maxConnections; c++ {
 		connection, err := NNTP.Connect(config)
 		if err != nil {

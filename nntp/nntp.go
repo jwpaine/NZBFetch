@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"bufio"
-	"io"
 )
 
 func authenticate(username string, password string, conn *tls.Conn) (n int, err error) {
@@ -25,7 +24,7 @@ func authenticate(username string, password string, conn *tls.Conn) (n int, err 
 	return
 }
 
-func Connect(config Types.Config) (conn *tls.Conn, _ error) {
+func Connect(config Types.Config) (*Types.Connection, error) {
 	conf := &tls.Config{
 		InsecureSkipVerify: false,
 	}
@@ -56,135 +55,129 @@ func Connect(config Types.Config) (conn *tls.Conn, _ error) {
 		case "502":
 			return nil, errors.New("authentication failed")
 		case "281":
-			return conn, nil
+			return &Types.Connection{
+				Conn:      conn,
+				LastGroup: "",
+			}, nil
 		}
 	}
 }
 
 func FetchSegment(segment Types.Segment) (Types.Segment, error) {
 	segmentId := segment.Article.Id
-	conn := segment.Connection
-	readBuf := make([]byte, 4096)
+	conn := segment.Connection.Conn
 	reader := bufio.NewReaderSize(conn, 256*1024)
+	readBuf := make([]byte, 4096)
 	segmentBuf := make([]byte, 0, segment.Article.Bytes)
 
 	for _, group := range segment.Groups {
-		_, err := send("GROUP "+group, conn)
-		if err != nil {
-			return segment, err
-		}
+		// Only send GROUP if this connection isn't already in that group
+		if segment.Connection.LastGroup != group {
+			// fmt.Println("Switching to group:", group)
+			if _, err := send("GROUP "+group, conn); err != nil {
+				return segment, err
+			}
 
-		for {
+			// Always read server response after sending GROUP
 			n, err := reader.Read(readBuf)
 			if err != nil {
 				return segment, err
 			}
-			statusFields := strings.Fields(string(readBuf[:n]))
-			if len(statusFields) > 0 {
-				status := statusFields[0]
-				switch status {
-				case "211":
-					fmt.Println("Searching for article in group: " + group)
-					_, err := send("BODY <"+segmentId+">", conn)
-					if err != nil {
-						return segment, err
-					}
-					continue
-				case "411":
-					fmt.Println("No such group: " + group)
-					continue
-				case "430":
-					fmt.Println("430 no such article found")
-					continue
-				}
+
+			tokens := strings.Fields(string(readBuf[:n]))
+			if len(tokens) == 0 {
+				continue
 			}
 
-			// If body line starts
-			if bytes.Contains(readBuf, []byte("=ybegin")) {
-				// Start of yEnc body
-				bodyBuf := readBuf
-				segmentBuf, err = readBodyOnTheFly(reader, bodyBuf)
-				if err != nil {
-					return segment, err
-				}
-				return Types.Segment{Article: segment.Article, Data: segmentBuf}, nil
+			switch tokens[0] {
+			case "211":
+				//fmt.Println("Group selected:", group)
+				segment.Connection.LastGroup = group // ✅ update connection state
+			case "411":
+				fmt.Println("No such group:", group)
+				continue
+			default:
+				continue
 			}
+		}
+
+		// Request the article body
+		if _, err := send("BODY <"+segmentId+">", conn); err != nil {
+			return segment, err
+		}
+
+		// Expect "222 ... body follows" or "430 no such article"
+		n, err := reader.Read(readBuf)
+		if err != nil {
+			return segment, err
+		}
+
+		statusFields := strings.Fields(string(readBuf[:n]))
+		if len(statusFields) == 0 {
+			continue
+		}
+
+		switch statusFields[0] {
+		case "222":
+			// fmt.Println("Downloading segment from:", group)
+			segmentBuf, err = readBodyOnTheFly(reader)
+			if err != nil {
+				return segment, err
+			}
+
+			// Sanity check before returning
+			if !bytes.Contains(segmentBuf, []byte("=ybegin")) {
+				return segment, fmt.Errorf("no yEnc header found for %s", segmentId)
+			}
+
+			return Types.Segment{
+				Article:   segment.Article,
+				Data:      segmentBuf,
+				GroupUsed: group,
+			}, nil
+
+		case "430":
+			fmt.Println("430 no such article found in group:", group)
+			continue
+
+		default:
+			continue
 		}
 	}
 
-	return segment, errors.New("segment not found in any group")
+	return segment, errors.New("segment not found in any listed group")
 }
 
 // readBodyOnTheFly reads NNTP body and undot-stuffs as data arrives.
-// Stops when terminator "." line or "=yend" marker found.
 
-func readBodyOnTheFly(reader *bufio.Reader, initial []byte) ([]byte, error) {
-	buf := make([]byte, 4096)
-	out := make([]byte, 0, len(initial)+4096)
-	atLineStart := true
-	prevCR := false
-
-	out = append(out, processNNTPChunk(initial, &atLineStart, &prevCR)...)
+func readBodyOnTheFly(r *bufio.Reader) ([]byte, error) {
+	var out bytes.Buffer
 
 	for {
-		n, err := reader.Read(buf)
-		if n > 0 {
-			chunk := buf[:n]
-			out = append(out, processNNTPChunk(chunk, &atLineStart, &prevCR)...)
-			if bytes.Contains(out, []byte("=yend")) {
-				break
-			}
-		}
+		line, err := r.ReadBytes('\n')
 		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return out, err
+			return out.Bytes(), err
+		}
+
+		// End-of-article marker: "." or ".\r\n"
+		if bytes.Equal(line, []byte(".\r\n")) || bytes.Equal(line, []byte(".\n")) {
+			break
+		}
+
+		// Dot-stuffed lines ("..") become single dot lines
+		if len(line) > 1 && line[0] == '.' && line[1] == '.' {
+			line = line[1:]
+		}
+
+		out.Write(line)
+
+		// We still read until terminator even after yend
+		if bytes.Contains(line, []byte("=yend")) {
+			continue
 		}
 	}
 
-	return out, nil
-}
-
-// processNNTPChunk performs on-the-fly undot-stuffing of a data chunk.
-func processNNTPChunk(b []byte, atLineStart *bool, prevCR *bool) []byte {
-	var out []byte
-	for i := 0; i < len(b); i++ {
-		c := b[i]
-
-		// newline detection
-		if c == '\r' {
-			*prevCR = true
-			out = append(out, c)
-			continue
-		}
-		if c == '\n' {
-			out = append(out, c)
-			*atLineStart = true
-			*prevCR = false
-			continue
-		}
-
-		if *atLineStart && c == '.' {
-			// Possible terminator or dot-stuffed line
-			if i+1 < len(b) {
-				nc := b[i+1]
-				if nc == '.' {
-					out = append(out, '.') // ".." -> "."
-					i++
-					*atLineStart = false
-					continue
-				} else if nc == '\r' || nc == '\n' {
-					// Terminator "." line
-					return out
-				}
-			}
-		}
-
-		out = append(out, c)
-		*atLineStart = false
-	}
-	return out
+	return out.Bytes(), nil
 }
 
 func send(message string, conn *tls.Conn) (n int, err error) {
