@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/BurntSushi/toml" // config as Tom's Obvious, Minimal Language
 	"github.com/chrisfarms/yenc"
@@ -128,6 +129,8 @@ func download(nzb *NZB.Nzb, fileBegin int, segmentBegin int, connections chan *t
 	totalSize := NZB.GetTotalSize(nzb)
 	bytesRemaining := totalSize
 	fmt.Printf("Total NZB size: %d bytes\n", bytesRemaining)
+	timeLast := time.Now()
+	bytesIn := 0
 	// for each file in nzb
 	for i := fileBegin; i < len(nzb.Files); i++ {
 		// create map to keep track of out-of-order segments
@@ -159,11 +162,18 @@ func download(nzb *NZB.Nzb, fileBegin int, segmentBegin int, connections chan *t
 					if j.Article.Number == 0 {
 						break
 					}
-					// print bytes remaining
-					bytesRemaining -= j.Article.Bytes
-					// fmt.Printf("Bytes remaining: %d\n", bytesRemaining)
-					percentDone := float64(totalSize-bytesRemaining) / float64(totalSize) * 100
-					fmt.Printf("Progress: %.2f%%\n", percentDone)
+
+					timeNow := time.Now()
+					if timeLast.IsZero() || time.Since(timeLast) >= 5*time.Second {
+						timeLast = timeNow
+						bytesInThisInterval := bytesIn
+						bytesIn = 0
+						speed := float64(bytesInThisInterval) / 1024.0 // KB/s
+						fmt.Printf("Download speed: %.2f KB/s\n", speed)
+					}
+					// bytesIn += int(j.Article.Bytes)
+					bytesIn += len(segment.Data)
+
 					// write segment
 					write(j, targetName)
 					delete(segmentMap, expected)

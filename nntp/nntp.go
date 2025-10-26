@@ -1,42 +1,3 @@
-/*
-~~~~rfc3977~~~~~
-100 help text follows
-   199 debug output
-   200 server ready - posting allowed
-   201 server ready - no posting allowed
-   202 slave status noted
-   205 closing connection - goodbye!
-   211 n f l s group selected
-   215 list of newsgroups follows
-   220 n <a> article retrieved - head and body follow 221 n <a> article
-   retrieved - head follows
-   222 n <a> article retrieved - body follows
-   223 n <a> article retrieved - request text separately 230 list of new
-   articles by message-id follows
-   231 list of new newsgroups follows
-   235 article transferred ok
-   240 article posted ok
-   335 send article to be transferred.  End with <CR-LF>.<CR-LF>
-   340 send article to be posted. End with <CR-LF>.<CR-LF>
-   400 service discontinued
-   411 no such news group
-   412 no newsgroup has been selected
-   420 no current article has been selected
-   421 no next article in this group
-   422 no previous article in this group
-   423 no such article number in this group
-   430 no such article found
-   435 article not wanted - do not send it
-   436 transfer failed - try again later
-   437 article rejected - do not try again.
-   440 posting not allowed
-   441 posting failed
-   500 command not recognized
-   501 command syntax error
-   502 access restriction or permission denied
-   503 program fault - command not performed
-*/
-
 package nntp
 
 import (
@@ -60,179 +21,168 @@ func authenticate(username string, password string, conn *tls.Conn) (n int, err 
 	}
 	return
 }
+
 func Connect(config Types.Config) (conn *tls.Conn, _ error) {
 	conf := &tls.Config{
 		InsecureSkipVerify: false,
 	}
-	/*
-		open tcp connection to server
-	*/
 	conn, err := tls.Dial("tcp", config.Address+":"+config.Port, conf)
 	if err != nil {
 		log.Println(conn, err)
 		return nil, err
 	}
-	// wait for server to be ready (STATUS CODE 200) and Authenticated (STATUS 281)
+
 	for {
-		// read message from server
 		buf := make([]byte, 100)
 		n, err := conn.Read(buf)
 		if err != nil {
 			return nil, err
 		}
-		// tokenize message by space
 		tokens := strings.Fields(string(buf[:n]))
-		// if ready
-		if tokens[0] == "200" || tokens[0] == "201" {
-			// fmt.Print("Server ready\n")
-			// authenticate user
+		if len(tokens) == 0 {
+			continue
+		}
+
+		switch tokens[0] {
+		case "200", "201":
 			n, err := authenticate(config.Username, config.Password, conn)
 			if err != nil {
 				log.Println(n, err)
 				return nil, err
 			}
-		}
-		if tokens[0] == "502" {
-			fmt.Print("Login failed\n")
-			return nil, errors.New("Authentication failed")
-		}
-
-		if tokens[0] == "281" {
-			// login success
+		case "502":
+			return nil, errors.New("authentication failed")
+		case "281":
 			return conn, nil
 		}
 	}
-
 }
 
 func FetchSegment(segment Types.Segment) (Types.Segment, error) {
-
 	segmentId := segment.Article.Id
-	readBuf := make([]byte, segment.Article.Bytes/2)
-	segmentBuf := []byte("")
 	conn := segment.Connection
+	readBuf := make([]byte, 4096)
+	segmentBuf := make([]byte, 0, segment.Article.Bytes)
 
-	for i := 0; i < len(segment.Groups); i++ {
-		group := string(segment.Groups[i])
+	for _, group := range segment.Groups {
 		_, err := send("GROUP "+group, conn)
 		if err != nil {
 			return segment, err
 		}
-		// start reading and responding
+
 		for {
 			n, err := conn.Read(readBuf)
 			if err != nil {
-				fmt.Print(err)
-				conn = nil
 				return segment, err
 			}
-			// switch based on status code in reply from server
-			status := strings.Fields(string(readBuf[:n]))[0]
+			statusFields := strings.Fields(string(readBuf[:n]))
+			if len(statusFields) > 0 {
+				status := statusFields[0]
+				switch status {
+				case "211":
+					_, err := send("BODY <"+segmentId+">", conn)
+					if err != nil {
+						return segment, err
+					}
+					continue
+				case "411":
+					fmt.Println("No such group: " + group)
+					continue
+				case "430":
+					fmt.Println("430 no such article found")
+					continue
+				}
+			}
 
-			switch status {
-			case "211": // group selected
-				// get article
-				_, err := send("BODY <"+segmentId+">", conn)
+			// If body line starts
+			if bytes.Contains(readBuf, []byte("=ybegin")) {
+				// Start of yEnc body
+				bodyBuf := readBuf
+				segmentBuf, err = readBodyOnTheFly(conn, bodyBuf)
 				if err != nil {
 					return segment, err
 				}
-				continue
-			case "411": // no such group
-				fmt.Println("No such group: " + group)
-				continue
-			case "222": // Body follows
-				// check for =ybegin
-				startIndex := bytes.Index(readBuf, []byte("=ybegin"))
-
-				// start found
-				if startIndex != -1 {
-					segmentBuf = append(segmentBuf, readBuf[startIndex:n]...) // Append readBuf from startIndex to n
-				}
-				// if we actually end here, return the segment...
-				if bytes.Contains(readBuf, []byte("=yend")) {
-					segmentBuf = undotStuff(segmentBuf)
-					return Types.Segment{Article: segment.Article, Data: segmentBuf}, nil
-				}
-				continue
-			case "430":
-				fmt.Print("430 no such article found\n")
-				continue
-			default:
-				// prior status was 220, or segment data so save
-
-				startIndex := bytes.Index(readBuf, []byte("=ybegin"))
-				// start found
-				if startIndex != -1 {
-					segmentBuf = append(segmentBuf, readBuf[startIndex:n]...) // Append readBuf from startIndex to n
-					continue
-				}
-
-				segmentBuf = append(segmentBuf, readBuf[:n]...) // append readBuf to segment
-
-				// return segment data if we find =yend
-				if bytes.Contains(readBuf, []byte("=yend")) {
-					segmentBuf = undotStuff(segmentBuf)
-					return Types.Segment{segment.Article, segmentBuf, nil, nil}, nil
-				}
+				return Types.Segment{Article: segment.Article, Data: segmentBuf}, nil
 			}
-
 		}
 	}
-	return segment, errors.New("Segment not found in any group")
+
+	return segment, errors.New("segment not found in any group")
 }
 
-func send(message string, conn *tls.Conn) (n int, err error) {
-	return conn.Write([]byte(message + "\r\n"))
-}
-
-// undotStuff removes NNTP dot-stuffing from the accumulated article body.
-// It also drops a lone terminator line "."
-func undotStuff(b []byte) []byte {
-	var out = make([]byte, 0, len(b))
+// readBodyOnTheFly reads NNTP body and undot-stuffs as data arrives.
+// Stops when terminator "." line or "=yend" marker found.
+func readBodyOnTheFly(conn *tls.Conn, initial []byte) ([]byte, error) {
+	buf := make([]byte, 4096)
+	out := make([]byte, 0, len(initial)+4096)
 	atLineStart := true
-	unstuffs := 0
-	// terminatorDropped := false
-	lines := 0
+	prevCR := false
 
+	// process initial buffer (could contain partial body)
+	out = append(out, processNNTPChunk(initial, &atLineStart, &prevCR)...)
+
+	for {
+		n, err := conn.Read(buf)
+		if n > 0 {
+			chunk := buf[:n]
+			out = append(out, processNNTPChunk(chunk, &atLineStart, &prevCR)...)
+			// detect =yend marker
+			if bytes.Contains(out, []byte("=yend")) {
+				break
+			}
+		}
+		if err != nil {
+			if strings.Contains(err.Error(), "EOF") {
+				break
+			}
+			return out, err
+		}
+	}
+
+	return out, nil
+}
+
+// processNNTPChunk performs on-the-fly undot-stuffing of a data chunk.
+func processNNTPChunk(b []byte, atLineStart *bool, prevCR *bool) []byte {
+	var out []byte
 	for i := 0; i < len(b); i++ {
 		c := b[i]
 
-		// Handle CRLF and LF as newlines
+		// newline detection
 		if c == '\r' {
-			out = append(out, '\r')
-			if i+1 < len(b) && b[i+1] == '\n' {
-				out = append(out, '\n')
-				i++
-			}
-			atLineStart = true
-			lines++
+			*prevCR = true
+			out = append(out, c)
 			continue
 		}
 		if c == '\n' {
-			out = append(out, '\n')
-			atLineStart = true
-			lines++
+			out = append(out, c)
+			*atLineStart = true
+			*prevCR = false
 			continue
 		}
 
-		if atLineStart && c == '.' {
-			// Check for NNTP terminator "." followed by EOL or end
-			if i+1 == len(b) || b[i+1] == '\r' || b[i+1] == '\n' {
-				break
-			}
-			// Dot-stuffed line: ".." -> emit single '.'
-			if i+1 < len(b) && b[i+1] == '.' {
-				out = append(out, '.')
-				i++
-				unstuffs++
-				atLineStart = false
-				continue
+		if *atLineStart && c == '.' {
+			// Possible terminator or dot-stuffed line
+			if i+1 < len(b) {
+				nc := b[i+1]
+				if nc == '.' {
+					out = append(out, '.') // ".." -> "."
+					i++
+					*atLineStart = false
+					continue
+				} else if nc == '\r' || nc == '\n' {
+					// Terminator "." line
+					return out
+				}
 			}
 		}
 
 		out = append(out, c)
-		atLineStart = false
+		*atLineStart = false
 	}
-
 	return out
+}
+
+func send(message string, conn *tls.Conn) (n int, err error) {
+	return conn.Write([]byte(message + "\r\n"))
 }
