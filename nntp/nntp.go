@@ -91,7 +91,7 @@ func FetchSegment(segment Types.Segment) (Types.Segment, error) {
 
 			switch tokens[0] {
 			case "211":
-				//fmt.Println("Group selected:", group)
+				// fmt.Println("Group selected:", group)
 				segment.Connection.LastGroup = group // ✅ update connection state
 			case "411":
 				fmt.Println("No such group:", group)

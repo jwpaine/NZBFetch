@@ -20,6 +20,7 @@ type Segment struct {
 	Connection *Connection
 	Groups     []string
 	GroupUsed  string
+	OutName    string // per-file routing key / target filename
 }
 
 type Connection struct {

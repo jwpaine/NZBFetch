@@ -5,249 +5,203 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"strconv"
 	"strings"
-	"time"
+	"sync"
 
-	"github.com/BurntSushi/toml" // config as Tom's Obvious, Minimal Language
+	"github.com/BurntSushi/toml"
 	"github.com/chrisfarms/yenc"
 
-	//	"gopkg.in/yenc.v0"
-	// decode yenc
 	NNTP "nzbfetch/nntp"
 	NZB "nzbfetch/nzb"
 	Types "nzbfetch/types"
 )
 
 func loadConfig() (conf Types.Config, err error) {
-	b, err := os.ReadFile("client.conf") // just pass the file name
+	b, err := os.ReadFile("client.conf")
 	if err != nil {
-		fmt.Print(err)
-		return
+		return conf, err
 	}
-	str := string(b) // convert content to a 'string'
-	_, err = toml.Decode(str, &conf)
-	if err != nil {
-		// handle error
-		return
-	}
+	_, err = toml.Decode(string(b), &conf)
 	return
 }
 
-/*
-workers take a connection c and a job j from respective pools,
-fetch segment, and send segment to results channel where it's read by the download function
-*/
-func worker(id int, jobs <-chan Types.Segment, con <-chan *Types.Connection, results chan<- Types.Segment) {
-	for c := range con {
-		for j := range jobs {
-			j.Connection = c
-			segment, err := NNTP.FetchSegment(j)
-			// fmt.Println("received segment. Group used: " + segment.GroupUsed)
-			// fmt.Println("Worker", id, "fetched segment number:", segment.Article.Number)
-			c.LastGroup = segment.GroupUsed
-			if err != nil {
-				fmt.Print(err)
-			}
-			results <- segment
+// Reader fetches segments using its dedicated NNTP connection
+func reader(id int, jobs <-chan Types.Segment, conn *Types.Connection, results chan<- Types.Segment, wg *sync.WaitGroup) {
+	defer wg.Done()
+	fmt.Printf("Reader %d started\n", id)
+	for j := range jobs {
+		j.Connection = conn
+		segment, err := NNTP.FetchSegment(j)
+		if err != nil {
+			fmt.Printf("Reader %d error: %v\n", id, err)
+			continue
 		}
+		// fmt.Println("Fetched segment:", segment.Article.Id)
+		segment.OutName = j.OutName
+		conn.LastGroup = segment.GroupUsed
+		results <- segment
 	}
+	fmt.Printf("Reader %d finished\n", id)
 }
 
-/*
-write yenc file to disk, decode, append binary data
-*/
 func write(segment Types.Segment, outName string) {
-
-	// Decode directly from memory to avoid temp file and contention
+	if outName == "" {
+		outName = segment.Article.Id
+	}
 	part, err := yenc.Decode(bytes.NewReader(segment.Data))
 	if err != nil {
-		panic("decoding: " + err.Error())
+		log.Printf("decode failed for %s: %v", segment.Article.Id, err)
+		return
 	}
-	// fmt.Println("Decoded: Filename", part.Name)
 
-	// open file to append binary data
 	safeName := sanitizeFilename(outName)
 	f, err := os.OpenFile("processed/"+safeName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
-		fmt.Print(err)
+		log.Printf("open %s: %v", safeName, err)
 		return
 	}
 	defer f.Close()
 
-	// write binary data to file
-	_, err = f.Write(part.Body)
-	if err != nil {
-		fmt.Print(err)
-		return
+	if _, err := f.Write(part.Body); err != nil {
+		fmt.Printf("write %s: %v", safeName, err)
+	} else {
+		fmt.Printf("Wrote segment %d to %s\n", segment.Article.Number, safeName)
 	}
-
-	// fmt.Println("Successfully wrote segment to " + safeName)
-
 }
 
 func sanitizeFilename(filename string) string {
-	// Define a list of invalid characters
 	invalidChars := []string{"\\", "/", ":", "*", "?", "\"", "<", ">", "|"}
-
-	// Replace invalid characters with underscores
-	for _, char := range invalidChars {
-		filename = strings.ReplaceAll(filename, char, "_")
+	for _, c := range invalidChars {
+		filename = strings.ReplaceAll(filename, c, "_")
 	}
-	// Remove whitespace from the filename
-	filename = strings.TrimSpace(filename)
-
-	return filename
+	return strings.TrimSpace(filename)
 }
 
-// filenameFromSubject extracts the quoted filename from an NZB subject.
-// Falls back to the whole subject if no quotes are found.
 func filenameFromSubject(subject string) string {
-	// Handle HTML entity for quotes just in case
 	s := strings.ReplaceAll(subject, "&quot;", "\"")
 	start := strings.IndexByte(s, '"')
 	if start == -1 {
-		return strings.TrimSpace(s)
+		return s
 	}
 	rest := s[start+1:]
 	end := strings.IndexByte(rest, '"')
 	if end == -1 {
-		return strings.TrimSpace(rest)
+		return s
 	}
-	return strings.TrimSpace(rest[:end])
+	return rest[:end]
 }
 
-/*
-manage the download of files and segments contained in a single nzb file
-*/
-func download(nzb *NZB.Nzb, fileBegin int, segmentBegin int, connections chan *Types.Connection, maxWorkers int) {
-	jobs := make(chan Types.Segment, 200)
-	results := make(chan Types.Segment, 100)
-
-	for w := 1; w <= maxWorkers; w++ { // 3 connections
-		go worker(w, jobs, connections, results)
+func startDispatcher(results <-chan Types.Segment) {
+	type queue struct {
+		ch chan Types.Segment
 	}
-	totalSize := NZB.GetTotalSize(nzb)
-	bytesRemaining := totalSize
-	fmt.Printf("Total NZB size: %d bytes\n", bytesRemaining)
-	timeLast := time.Now()
-	bytesIn := 0
-	// for each file in nzb
-	for i := fileBegin; i < len(nzb.Files); i++ {
-		// create map to keep track of out-of-order segments
-		segmentMap := make(map[int]Types.Segment)
-		var expected = 1
-		// for each segment
-		fmt.Println("Working on new File: " + nzb.Files[i].Subject)
-		// Derive the target output filename from the NZB subject
-		targetName := filenameFromSubject(nzb.Files[i].Subject)
+	perFile := sync.Map{}
 
-		// add each segment to jobs pool in a separate goroutine to avoid blocking
-		enqueueDone := make(chan struct{})
-		go func(fileIdx int) {
-			defer close(enqueueDone)
-			for j := segmentBegin; j < len(nzb.Files[fileIdx].Segments); j++ {
-				jobs <- Types.Segment{Article: nzb.Files[fileIdx].Segments[j], Groups: nzb.Files[fileIdx].Groups}
+	go func() {
+		for seg := range results {
+			key := seg.OutName
+			if key == "" {
+				key = seg.Article.Id
 			}
-		}(i)
+
+			var q *queue
+			v, ok := perFile.Load(key)
+			if ok {
+				q = v.(*queue)
+			} else {
+				q = &queue{ch: make(chan Types.Segment, 2000)}
+				perFile.Store(key, q)
+				go fileWriter(key, q.ch)
+			}
+
+			select {
+			case q.ch <- seg:
+			default:
+				go func(s Types.Segment) { q.ch <- s }(seg)
+			}
+		}
+
+		perFile.Range(func(_, v any) bool {
+			close(v.(*queue).ch)
+			return true
+		})
+	}()
+}
+
+func fileWriter(outName string, in <-chan Types.Segment) {
+	expected := 1
+	pending := make(map[int]Types.Segment)
+	for s := range in {
+		n := s.Article.Number
+		pending[n] = s
 		for {
-			segment := <-results
-			// process new segment
-			if segment.Article.Number == expected {
-				write(segment, targetName)
-				expected++
-				// write segments stored in memory:
-				for expected < len(nzb.Files[i].Segments)+1 {
-					j := segmentMap[expected]
-					// if next segment not found in memory
-					if j.Article.Number == 0 {
-						break
-					}
-
-					timeNow := time.Now()
-					if timeLast.IsZero() || time.Since(timeLast) >= 5*time.Second {
-						timeLast = timeNow
-						bytesInThisInterval := bytesIn
-						bytesIn = 0
-						speed := float64(bytesInThisInterval) / 1024.0 // KB/s
-						fmt.Printf("Download speed: %.2f KB/s\n", speed)
-					}
-					// bytesIn += int(j.Article.Bytes)
-					bytesIn += len(segment.Data)
-
-					// write segment
-					write(j, targetName)
-					delete(segmentMap, expected)
-					expected++
-					// update progress after advancing expected
-
-				}
-				// check if this is last segment
-				if expected > len(nzb.Files[i].Segments) {
-					// ensure the enqueuer finished before moving to the next file
-					<-enqueueDone
-					break
-				}
-				continue
+			next, ok := pending[expected]
+			if !ok {
+				break
 			}
-			// fmt.Println("Segment " + strconv.Itoa(expected) + " unexpected, saving to map")
-			segmentMap[segment.Article.Number] = segment
+			write(next, outName)
+			delete(pending, expected)
+			expected++
 		}
 	}
-	close(jobs)
-	fmt.Println("Download Complete!")
 }
-
-func manager() {
-	/*
-		load config and define parameters
-	*/
+func main() {
+	log.SetFlags(log.Lshortfile)
 	config, err := loadConfig()
 	if err != nil {
-		fmt.Print("Error parsing config")
-		return
+		log.Fatalf("Error parsing config: %v", err)
 	}
 	maxConnections := config.Connections
-	fmt.Print("Max Connections: " + strconv.Itoa(maxConnections) + "\n")
-	/*
-		make job pool and send maxConnections into pool to be multiplexed by workers
-	*/
-	connections := make(chan *Types.Connection, maxConnections)
-	for c := 1; c <= maxConnections; c++ {
-		connection, err := NNTP.Connect(config)
-		if err != nil {
-			fmt.Print(err)
-			return
+	fmt.Printf("Max Connections: %d\n", maxConnections)
+
+	jobs := make(chan Types.Segment, 500)
+	results := make(chan Types.Segment, 500)
+	startDispatcher(results)
+
+	// ---- Load NZB ----
+	fmt.Println("Loading nzb file...")
+	data, err := os.ReadFile("test.nzb")
+	if err != nil {
+		log.Fatalf("Failed to read NZB: %v", err)
+	}
+	nzb, err := NZB.NewString(string(data))
+	if err != nil {
+		log.Fatalf("Failed to parse NZB: %v", err)
+	}
+	fmt.Println("Successfully opened test.nzb")
+
+	totalSize := NZB.GetTotalSize(nzb)
+	fmt.Printf("Total NZB size: %d bytes\n", totalSize)
+
+	// ---- Enqueue all jobs before starting readers ----
+	go func() {
+		for i := 0; i < len(nzb.Files); i++ {
+			outName := filenameFromSubject(nzb.Files[i].Subject)
+			for j := 0; j < len(nzb.Files[i].Segments); j++ {
+				jobs <- Types.Segment{
+					Article: nzb.Files[i].Segments[j],
+					Groups:  nzb.Files[i].Groups,
+					OutName: outName,
+				}
+			}
 		}
-		fmt.Printf("Connection %d established\n", c)
-		connections <- connection
+		fmt.Println("All jobs added.")
+		close(jobs)
+	}()
+
+	// ---- Start readers AFTER enqueue goroutine ----
+	var wg sync.WaitGroup
+	for i := 1; i <= maxConnections; i++ {
+		conn, err := NNTP.Connect(config)
+		if err != nil {
+			log.Fatalf("Connection %d failed: %v", i, err)
+		}
+		fmt.Printf("Connection %d established\n", i)
+		wg.Add(1)
+		go reader(i, jobs, conn, results, &wg)
 	}
-	/*
-		load NZB file(s) from disk
-	*/
-	fmt.Print("Loading next nzb file...")
-	b, err := os.ReadFile("test.nzb") // just pass the file name
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println("Successfully Opened test.nzb")
-	nzb, err := NZB.NewString(string(b)) // marshal, returning pointer to nzb object
-	if err != nil {
-		panic(err)
-	}
-	/*
-		call download for each NZB opened
-	*/
-	go download(nzb, 0, 0, connections, maxConnections)
 
-}
-
-func main() {
-
-	log.SetFlags(log.Lshortfile)
-
-	go manager()
-
-	select {} // block forever
-
+	wg.Wait() // wait for all readers to finish
+	close(results)
+	fmt.Println("All readers finished.")
 }
